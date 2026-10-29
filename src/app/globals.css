@@ -215,3 +215,26 @@ input[type="range"].timeline::-moz-range-thumb {
     animation: none;
   }
 }
+
+/* District / taluk names on the map */
+.admin-label {
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  width: max-content !important;
+  height: auto !important;
+  color: #fff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+.admin-district {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+.admin-taluk {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.75;
+}

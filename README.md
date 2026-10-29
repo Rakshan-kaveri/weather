@@ -17,7 +17,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 
 | # | Module | What it does |
 |---|--------|--------------|
-| 1 | **Live weather map** | Full-screen map with 8 layers: **animated live satellite clouds** (Meteosat over India from EUMETSAT every 15 min, Himawari every 10 min, global infrared mosaic, NASA daily true colour), rain radar, rain, animated wind particles, temperature, clouds, pressure, humidity. Timeline playback, colour legends, place search, “my location”, click-anywhere weather and live **cyclone markers**. |
+| 1 | **Live weather map** | Full-screen map with 8 layers: **animated live satellite clouds** (Meteosat over India from EUMETSAT every 15 min, Himawari every 10 min, global infrared mosaic, NASA daily true colour), rain radar, rain, animated wind particles, temperature, clouds, pressure, humidity. Timeline playback, colour legends, place search, “my location”, click-anywhere weather, live **cyclone markers with past track, forecast path and wind-impact areas**, a night-lights base under infrared clouds, and **district and taluk boundaries with names** when zoomed in. |
 | 2 | **My weather dashboard** | Detects your location (or search any place) and shows current conditions, a 48-hour chart, tomorrow, a 7-day forecast, air quality (PM2.5, PM10, NO₂, O₃) and the past 7 days. |
 | 3 | **Google sign-in** | One-click Google login with database sessions. Guests can still use the map and forecasts. |
 | 4 | **Saved places & compare** | Save home, hostel, village or trip spots, set a default, rename, and compare two places side by side. |
@@ -39,7 +39,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 | Auth | NextAuth (Auth.js) with Google OAuth 2.0 |
 | Email | Resend (SMTP fallback supported), signed delivery webhooks |
 | SMS | textbee.dev Android SMS gateway, signed delivery webhooks |
-| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), RainViewer, Esri |
+| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), geoBoundaries (district/taluk boundaries), NASA Black Marble (night lights), RainViewer, Esri |
 | Hosting | Google Cloud VM + PM2 + Cloudflare Tunnel |
 
 ## Architecture
@@ -107,5 +107,5 @@ Step-by-step guide for Google Cloud + Cloudflare Tunnel: **[docs/DEPLOYMENT.md](
 ## Credits
 
 Forecast data © [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) · Satellite imagery © EUMETSAT, NASA EOSDIS GIBS,
-JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Radar: RainViewer · Map labels © Esri.
+JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Boundaries: geoBoundaries (CC BY 4.0) · Radar: RainViewer · Map labels © Esri.
 Warnings are automated guidance; always follow official IMD and local authority advisories.

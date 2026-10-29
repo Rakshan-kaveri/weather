@@ -7,6 +7,8 @@ export async function register() {
   const { cached } = await import("./lib/cache");
   const { satelliteSources } = await import("./lib/satellite");
   const { activeCyclones } = await import("./lib/severe");
+  const { preloadBoundaries } = await import("./lib/boundaries");
+  preloadBoundaries();
 
   const warm = async () => {
     await Promise.allSettled([cached("sat:sources", 300, satelliteSources), activeCyclones()]);

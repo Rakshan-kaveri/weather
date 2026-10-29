@@ -19,7 +19,7 @@ type Selected = { lat: number; lon: number; name?: string; region?: string; coun
 const INDIA: [number, number] = [21.5, 79];
 const LAYER_KEY = "skycast:layer";
 
-type Cyclone = { id: string; name: string; alertLevel: "Green" | "Orange" | "Red"; lat: number; lon: number; severity: string; link: string };
+type Cyclone = { id: string; episodeId: string | null; name: string; alertLevel: "Green" | "Orange" | "Red"; lat: number; lon: number; severity: string; link: string };
 
 export default function MapExplorer() {
   const { prefs } = usePrefs();
@@ -29,6 +29,10 @@ export default function MapExplorer() {
   const flowRef = useRef<HTMLCanvasElement | null>(null);
   const satStack = useRef<FrameStack | null>(null);
   const cycloneLayer = useRef<L.LayerGroup | null>(null);
+  const trackLayer = useRef<L.LayerGroup | null>(null);
+  const adminLayer = useRef<L.LayerGroup | null>(null);
+  const nightLayer = useRef<L.TileLayer | null>(null);
+  const adminKey = useRef("");
   const radarStack = useRef<FrameStack | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const rafRef = useRef<number>(0);
@@ -88,9 +92,21 @@ export default function MapExplorer() {
     }).addTo(map);
 
     // Live satellite frames (EUMETSAT / NASA) are added on the Satellite layer
+    map.createPane("night").style.zIndex = "240";
+    nightLayer.current = L.tileLayer(
+      "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+      { pane: "night", maxNativeZoom: 8, maxZoom: 15, attribution: "Night lights: NASA Black Marble" },
+    );
     map.createPane("sat").style.zIndex = "250";
+    map.createPane("tracks").style.zIndex = "610";
+    trackLayer.current = L.layerGroup([], { pane: "tracks" }).addTo(map);
     map.createPane("cyclones").style.zIndex = "620";
     cycloneLayer.current = L.layerGroup([], { pane: "cyclones" }).addTo(map);
+    const adminPane = map.createPane("admin");
+    adminPane.style.zIndex = "455";
+    adminPane.style.pointerEvents = "none";
+    adminLayer.current = L.layerGroup([], { pane: "admin" }).addTo(map);
+    map.attributionControl.addAttribution("Boundaries: geoBoundaries (CC BY 4.0) · Cyclones: GDACS");
 
     // Overlay panes for the weather canvases, under the place labels
     const heatPane = map.createPane("heat");
@@ -209,6 +225,19 @@ export default function MapExplorer() {
     if (sat) satStack.current?.show(satIdx, sat.frames.length);
   }, [satIdx, sat]);
 
+  /* Infrared clouds look best over a dark night-lights base: the "screen" blend makes cold bright cloud tops
+     glow while the warm (dark) ground disappears, so city lights and coastlines show through. */
+  useEffect(() => {
+    const map = mapRef.current;
+    const pane = map?.getPane("sat");
+    if (!map || !pane) return;
+    const ir = layer === "satellite" && !!sat && sat.id !== "truecolor";
+    if (ir) nightLayer.current?.addTo(map);
+    else nightLayer.current?.remove();
+    pane.style.mixBlendMode = ir ? "screen" : "";
+    pane.style.filter = ir ? "contrast(1.45) brightness(1.08)" : "";
+  }, [layer, sat]);
+
   /* ─── Active cyclones (GDACS) — shown on every layer ─── */
   useEffect(() => {
     const load = () =>
@@ -239,7 +268,110 @@ export default function MapExplorer() {
         )
         .addTo(group);
     }
+
+    // Track history, forecast path and wind-impact areas for each cyclone
+    const tracks = trackLayer.current;
+    tracks?.clearLayers();
+    if (!tracks) return;
+    const ctrl = new AbortController();
+    type TF = { kind: "past" | "forecast" | "point" | "area"; level?: string; label?: string; geometry: GeoJSON.Geometry };
+    for (const c of cyclones) {
+      fetch(`/api/cyclones/track?id=${encodeURIComponent(c.id)}${c.episodeId ? `&episode=${encodeURIComponent(c.episodeId)}` : ""}`, { signal: ctrl.signal })
+        .then((r) => r.json())
+        .then((d: { features: TF[] }) => {
+          const areaStyle = (lvl?: string): L.PathOptions =>
+            lvl === "Red"
+              ? { color: "#ff5a5a", weight: 1, fillColor: "#ff5a5a", fillOpacity: 0.12 }
+              : lvl === "Orange"
+                ? { color: "#ff9a3c", weight: 1, fillColor: "#ff9a3c", fillOpacity: 0.12 }
+                : lvl === "Green"
+                  ? { color: "#3ecf8e", weight: 1, fillColor: "#3ecf8e", fillOpacity: 0.08 }
+                  : { color: "#9aa3b5", weight: 1, fillColor: "#5b6475", fillOpacity: 0.35 };
+          // areas first so lines and points sit on top
+          const order = { area: 0, past: 1, forecast: 2, point: 3 };
+          for (const f of [...d.features].sort((a, b) => order[a.kind] - order[b.kind])) {
+            const gj = { type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature;
+            if (f.kind === "area") L.geoJSON(gj, { pane: "tracks", style: areaStyle(f.level), interactive: false }).addTo(tracks);
+            else if (f.kind === "past" || f.kind === "forecast")
+              L.geoJSON(gj, {
+                pane: "tracks",
+                interactive: false,
+                style: f.kind === "past" ? { color: "#ff4d6d", weight: 2.5 } : { color: "#ffb347", weight: 2, dashArray: "6 6" },
+              }).addTo(tracks);
+            else
+              L.geoJSON(gj, {
+                pane: "tracks",
+                pointToLayer: (_p, ll) =>
+                  L.circleMarker(ll, {
+                    pane: "tracks",
+                    radius: 4.5,
+                    weight: 1.5,
+                    color: "#fff",
+                    fillColor: f.level === "cone" ? "#ffb347" : f.level === "Red" ? "#ff4d6d" : f.level === "Orange" ? "#ff9a3c" : "#ff4d6d",
+                    fillOpacity: 1,
+                  }),
+              })
+                .bindTooltip(f.label ? `${escapeHtml(c.name)} · ${escapeHtml(f.label)}` : escapeHtml(c.name), { direction: "top", offset: [0, -4] })
+                .addTo(tracks);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => ctrl.abort();
   }, [cyclones]);
+
+  /* ─── District & taluk boundaries with names (zoom 7+ / 9+) ─── */
+  useEffect(() => {
+    const map = mapRef.current;
+    const group = adminLayer.current;
+    if (!map || !group) return;
+    const z = map.getZoom();
+    const levels: (2 | 3)[] = z >= 9 ? [2, 3] : z >= 7 ? [2] : [];
+    const b = map.getBounds().pad(0.15);
+    const box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((v) => v.toFixed(1));
+    const key = `${levels.join(",")}|${box.join(",")}`;
+    if (key === adminKey.current) return;
+    adminKey.current = key;
+    if (!levels.length) {
+      group.clearLayers();
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const results = await Promise.all(
+          levels.map((lvl) =>
+            fetch(`/api/boundaries?level=${lvl}&w=${box[0]}&s=${box[1]}&e=${box[2]}&n=${box[3]}`, { signal: ctrl.signal }).then((r) => r.json()),
+          ),
+        );
+        group.clearLayers();
+        results.forEach((fc: GeoJSON.FeatureCollection, i) => {
+          const lvl = levels[i];
+          L.geoJSON(fc, {
+            pane: "admin",
+            interactive: false,
+            style: lvl === 2 ? { color: "#ffffff", weight: 1, opacity: 0.55, fill: false } : { color: "#ffffff", weight: 0.7, opacity: 0.35, dashArray: "3 4", fill: false },
+          }).addTo(group);
+          for (const f of fc.features) {
+            const props = f.properties as { name?: string; label?: [number, number] } | null;
+            if (!props?.name || !props.label) continue;
+            L.marker([props.label[1], props.label[0]], {
+              pane: "admin",
+              interactive: false,
+              keyboard: false,
+              icon: L.divIcon({ className: lvl === 2 ? "admin-label admin-district" : "admin-label admin-taluk", html: escapeHtml(props.name), iconSize: [0, 0] }),
+            }).addTo(group);
+          }
+        });
+      } catch {
+        /* aborted or unavailable */
+      }
+    }, 400);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [viewTick]);
 
   /* ─── Forecast grid for the visible area ──────────────── */
   const loadGrid = useCallback(async () => {

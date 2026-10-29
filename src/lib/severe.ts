@@ -107,6 +107,7 @@ export function assessForecast(fc: Forecast): Warning[] {
 
 export type Cyclone = {
   id: string;
+  episodeId: string | null;
   name: string;
   alertLevel: "Green" | "Orange" | "Red";
   lat: number;
@@ -137,8 +138,10 @@ export async function activeCyclones(): Promise<Cyclone[]> {
           if (!current && ended) continue;
           const [lon, lat] = f.geometry?.coordinates ?? [];
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          const episodeFromUrl = /episodeid=(\d+)/i.exec(JSON.stringify(p.url ?? ""))?.[1];
           all.push({
             id: String(p.eventid),
+            episodeId: p.episodeid != null ? String(p.episodeid) : episodeFromUrl ?? null,
             name: p.eventname || p.name || "Tropical cyclone",
             alertLevel: (p.alertlevel || level) as Cyclone["alertLevel"],
             lat,
@@ -192,4 +195,58 @@ export async function warningsFor(lat: number, lon: number): Promise<Warning[]> 
   const today = fc.current.time.slice(0, 10);
   const list = [...cycloneWarnings(lat, lon, cyclones, today), ...assessForecast(fc)];
   return list.sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level]);
+}
+
+/* ─── Cyclone track & forecast (GDACS event geometry) ─── */
+
+export type TrackFeature = {
+  kind: "past" | "forecast" | "point" | "area";
+  level?: "Green" | "Orange" | "Red" | "cone";
+  label?: string;
+  // GeoJSON geometry, coordinates rounded
+  geometry: { type: string; coordinates: unknown };
+};
+
+const round = (v: unknown): unknown => (Array.isArray(v) ? v.map(round) : typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
+
+/**
+ * Track line, track points and wind-impact areas for one cyclone, from GDACS's public geometry API.
+ * GDACS labels each feature with a "Class" such as Point_*, Line_*, Poly_Red/Orange/Green or Poly_Cones;
+ * anything unrecognised is still drawn generically, so the map degrades gracefully if the format shifts.
+ */
+export async function cycloneTrack(eventId: string, episodeId: string | null): Promise<TrackFeature[]> {
+  if (!/^\d+$/.test(eventId) || (episodeId && !/^\d+$/.test(episodeId))) return [];
+  return cached(`gdacs:track:${eventId}:${episodeId ?? ""}`, 1800, async () => {
+    const url = `https://www.gdacs.org/gdacsapi/api/polygons/getgeometry?eventtype=TC&eventid=${eventId}${episodeId ? `&episodeid=${episodeId}` : ""}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const j: any = await res.json().catch(() => null);
+    const out: TrackFeature[] = [];
+    for (const f of j?.features ?? []) {
+      const g = f.geometry;
+      if (!g?.type || !g.coordinates) continue;
+      const p = f.properties ?? {};
+      const cls = String(p.Class ?? p.class ?? p.polygonlabel ?? "");
+      const text = JSON.stringify(p).toLowerCase();
+      const isForecast = /forecast/.test(text) || /forecast/i.test(cls);
+      const geometry = { type: g.type, coordinates: round(g.coordinates) };
+      if (g.type === "Point" || g.type === "MultiPoint") {
+        const when = p.trackdate || p.datetime || p.advisory_datetime || p.polygondate || "";
+        const wind = p.windspeed ?? p.wind_speed ?? p.maxwind;
+        out.push({
+          kind: "point",
+          level: /red/i.test(cls) ? "Red" : /orange/i.test(cls) ? "Orange" : isForecast ? "cone" : undefined,
+          label: [when ? String(when).replace("T", " ").slice(0, 16) : "", wind ? `${Math.round(Number(wind))} km/h` : ""].filter(Boolean).join(" · ") || undefined,
+          geometry,
+        });
+      } else if (g.type.includes("LineString")) {
+        out.push({ kind: isForecast ? "forecast" : "past", geometry });
+      } else if (g.type.includes("Polygon")) {
+        const level = /cone/i.test(cls) ? "cone" : /red/i.test(cls) ? "Red" : /orange/i.test(cls) ? "Orange" : /green/i.test(cls) ? "Green" : "cone";
+        out.push({ kind: "area", level, geometry });
+      }
+    }
+    return out;
+  });
 }
