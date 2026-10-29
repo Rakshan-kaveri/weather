@@ -12,6 +12,7 @@ const NAV: { href: string; label: string; icon: IconName; auth?: boolean }[] = [
   { href: "/dashboard", label: "My weather", icon: "sun" },
   { href: "/places", label: "Places", icon: "pin", auth: true },
   { href: "/compare", label: "Compare", icon: "compare" },
+  { href: "/satellite-view", label: "Satellite View", icon: "satellite" },
   { href: "/subscriptions", label: "Reports", icon: "mail", auth: true },
   { href: "/alerts", label: "Alerts", icon: "bell", auth: true },
 ];

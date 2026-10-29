@@ -27,6 +27,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 | 8 | **Farmer mode** | Spraying, irrigation, heavy-rain and livestock heat advice, in Kannada, Hindi or English. Admins can register SMS-only farmers who have no smartphone or Google account. |
 | 9 | **Admin control room** | Users (last sign-in, approximate location, subscription status, last delivery status), missed-today list with one-click resend, full delivery log with delivery and open tracking from webhooks, scheduler health, and block/unblock and role management. |
 | 10 | **Settings & PWA** | °C/°F, wind units, 12/24-hour time, dark/light theme. Installable on phones and shows the last forecast offline. |
+| 11 | **Satellite View (external)** | A tab that links to or, if permitted, frames Zoom Earth's official website. Off by default (`ZOOM_EARTH_EMBED`); always offers an "Open Zoom Earth" link. See [docs/SATELLITE_VIEW.md](docs/SATELLITE_VIEW.md). |
 
 ## Tech stack
 
