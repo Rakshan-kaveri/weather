@@ -5,6 +5,7 @@
 import cron from "node-cron";
 import { runDailyReports } from "../src/lib/deliver";
 import { runAlerts } from "../src/lib/alerts";
+import { runSevereWatch } from "../src/lib/severeWatch";
 import { prisma } from "../src/lib/prisma";
 
 let reportsRunning = false;
@@ -36,6 +37,20 @@ async function alerts() {
   }
 }
 
+let severeRunning = false;
+async function severe() {
+  if (severeRunning) return;
+  severeRunning = true;
+  try {
+    const r = await runSevereWatch();
+    if (r.sent) console.log(`[${new Date().toISOString()}] severe weather: ${r.sent} warnings sent`);
+  } catch (err) {
+    console.error("severe weather watch failed", err);
+  } finally {
+    severeRunning = false;
+  }
+}
+
 async function cleanup() {
   // Keep the job log small: delete runs older than 14 days.
   await prisma.jobRun.deleteMany({ where: { startedAt: { lt: new Date(Date.now() - 14 * 86400_000) } } });
@@ -43,10 +58,12 @@ async function cleanup() {
 
 cron.schedule("*/5 * * * *", reports);
 cron.schedule("10 * * * *", alerts);
+cron.schedule("20,50 * * * *", severe);
 cron.schedule("30 3 * * *", cleanup);
 
-console.log("SkyCast worker started — reports every 5 min, alerts hourly.");
+console.log("SkyCast worker started — reports every 5 min, alerts hourly, severe-weather watch every 30 min.");
 void reports();
+void severe();
 
 process.on("SIGTERM", async () => {
   await prisma.$disconnect();

@@ -45,6 +45,11 @@ model User {
   timeFormat String @default("24") // 12 | 24
   theme      String @default("dark") // dark | light
 
+  // Automatic severe-weather warnings for the user's places
+  severeInApp Boolean @default(true)
+  severeEmail Boolean @default(true)
+  severeSms   Boolean @default(false)
+
   // Last sign-in / last seen location (approximate)
   lastLoginAt     DateTime?
   lastSeenAt      DateTime?
@@ -66,6 +71,7 @@ model User {
   alerts        AlertRule[]
   notifications Notification[]
   logins        LoginEvent[]
+  severeNotices SevereNotice[]
 }
 
 model Account {
@@ -165,6 +171,7 @@ model Subscription {
   includeAqi   Boolean @default(true)
   includeTips  Boolean @default(true)
   farmerTips   Boolean @default(false)
+  severeAlerts Boolean @default(true) // thunderstorm / heavy rain / cyclone warnings for this place
 
   active           Boolean   @default(true)
   unsubscribeToken String    @unique @default(cuid())
@@ -172,8 +179,9 @@ model Subscription {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  user       User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deliveries Delivery[]
+  user          User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries    Delivery[]
+  severeNotices SevereNotice[]
 
   @@index([active])
 }
@@ -258,4 +266,28 @@ model JobRun {
   message    String?   @db.Text
 
   @@index([job, startedAt])
+}
+
+/// One row per severe-weather warning sent to a user or SMS subscriber (also prevents duplicates).
+model SevereNotice {
+  id             String   @id @default(cuid())
+  key            String   @unique // recipient:place:type:level:date
+  userId         String?
+  subscriptionId String?
+  placeName      String
+  lat            Float
+  lon            Float
+  type           String // thunderstorm | heavy_rain | cyclone | strong_wind | downpour
+  level          String // watch | warning | severe
+  title          String
+  message        String   @db.Text
+  startsAt       String? // local ISO time the hazard begins
+  channels       String[] // app | email | sms
+  createdAt      DateTime @default(now())
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([userId])
 }

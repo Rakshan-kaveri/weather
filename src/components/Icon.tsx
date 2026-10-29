@@ -35,6 +35,9 @@ const paths: Record<string, React.ReactNode> = {
   send: <path d="m4 12 16-8-6 16-2-7-8-1Z" />,
   compare: <><path d="M8 4v16M16 4v16" /><path d="M4 8h4M16 16h4" /></>,
   leaf: <path d="M5 19c8 0 14-6 14-14-8 0-14 4-14 12v2Zm0 0 7-7" />,
+  storm: <><path d="M7 15a4 4 0 0 1 .5-8A5.5 5.5 0 0 1 18 8a3.5 3.5 0 0 1-.5 7" /><path d="m13 12-3 5h4l-2 5" /></>,
+  cyclone: <><path d="M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M5 9c2-5 9-6 12-2M19 15c-2 5-9 6-12 2M9 4c-4 3-4 9 0 11M15 20c4-3 4-9 0-11" /></>,
+  warning: <><path d="M12 3 2 20h20L12 3Z" /><path d="M12 10v4M12 17h.01" /></>,
   logout: <><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" /></>,
 };
 

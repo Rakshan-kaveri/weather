@@ -26,7 +26,7 @@ export default async function AdminOverview() {
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000);
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 3600_000);
 
-  const [users, newUsers, activeToday, emailSubs, smsSubs, alerts, last24, lastReportsRun, lastAlertsRun, recentFailures, missed, recentDeliveries] =
+  const [users, newUsers, activeToday, emailSubs, smsSubs, alerts, last24, lastReportsRun, lastAlertsRun, recentFailures, missed, recentDeliveries, lastSevereRun, severeRecent, severe24] =
     await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { createdAt: { gt: weekAgo } } }),
@@ -40,6 +40,13 @@ export default async function AdminOverview() {
       prisma.delivery.findMany({ where: { status: { in: ["FAILED", "BOUNCED"] }, createdAt: { gt: weekAgo } }, orderBy: { createdAt: "desc" }, take: 8 }),
       missedToday(),
       prisma.delivery.findMany({ where: { createdAt: { gt: twoWeeksAgo } }, select: { createdAt: true, status: true } }),
+      prisma.jobRun.findFirst({ where: { job: "severe-weather" }, orderBy: { startedAt: "desc" } }),
+      prisma.severeNotice.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { user: { select: { name: true } }, subscription: { select: { contactName: true } } },
+      }),
+      prisma.severeNotice.count({ where: { createdAt: { gt: dayAgo } } }),
     ]);
 
   const count = (s: string) => last24.find((x) => x.status === s)?._count ?? 0;
@@ -104,6 +111,10 @@ export default async function AdminOverview() {
               <dd>{lastAlertsRun ? `${timeAgo(lastAlertsRun.startedAt)} · ${lastAlertsRun.processed} rules checked, ${lastAlertsRun.sent} sent` : "never run"}</dd>
             </div>
             <div>
+              <dt className="text-fg-faint">Severe-weather watch</dt>
+              <dd>{lastSevereRun ? `${timeAgo(lastSevereRun.startedAt)} · ${lastSevereRun.processed} hazards found, ${lastSevereRun.sent} messages sent` : "never run"}</dd>
+            </div>
+            <div>
               <dt className="text-fg-faint">Email provider</dt>
               <dd className="capitalize">{emailProvider() === "console" ? "not configured (logging only)" : emailProvider()}</dd>
             </div>
@@ -115,9 +126,38 @@ export default async function AdminOverview() {
           <div className="mt-4 flex flex-wrap gap-2">
             <RunJobButton job="daily-reports" label="Run reports now" />
             <RunJobButton job="alerts" label="Check alerts now" />
+            <RunJobButton job="severe-weather" label="Scan severe weather" />
           </div>
         </section>
       </div>
+
+      <section className="card overflow-hidden">
+        <div className="flex items-center justify-between p-5 pb-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-muted">Severe-weather warnings sent</h2>
+          <span className="text-xs text-fg-faint">{severe24} in the last 24 h</span>
+        </div>
+        {severeRecent.length === 0 ? (
+          <p className="px-5 pb-5 text-sm text-fg-muted">No thunderstorm, heavy-rain or cyclone warnings have been needed yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px]">
+              <tbody>
+                {severeRecent.map((n) => (
+                  <tr key={n.id}>
+                    <td className="table-cell whitespace-nowrap text-xs text-fg-faint">{formatDateTime(n.createdAt)}</td>
+                    <td className="table-cell">{n.user?.name ?? n.subscription?.contactName ?? "—"}</td>
+                    <td className="table-cell">
+                      <span className={`chip ${n.level === "severe" ? "bg-bad/15 text-bad" : "bg-warn/15 text-warn"}`}>{n.level}</span>
+                    </td>
+                    <td className="table-cell font-medium">{n.title}</td>
+                    <td className="table-cell text-xs text-fg-muted">{n.channels.join(", ") || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="card overflow-hidden">
         <div className="flex items-center justify-between p-5 pb-3">

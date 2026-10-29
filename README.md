@@ -17,15 +17,16 @@ whether they subscribed to reports, and whether each report was actually deliver
 
 | # | Module | What it does |
 |---|--------|--------------|
-| 1 | **Live weather map** | Full-screen map with 8 layers: satellite (NASA daily true-colour and live Himawari infrared), rain radar, rain, animated wind particles, temperature, clouds, pressure, humidity. A 54-hour timeline with playback, colour legends, place search, “my location”, and click-anywhere weather. |
+| 1 | **Live weather map** | Full-screen map with 8 layers: **animated live satellite clouds** (Meteosat over India from EUMETSAT every 15 min, Himawari every 10 min, global infrared mosaic, NASA daily true colour), rain radar, rain, animated wind particles, temperature, clouds, pressure, humidity. Timeline playback, colour legends, place search, “my location”, click-anywhere weather and live **cyclone markers**. |
 | 2 | **My weather dashboard** | Detects your location (or search any place) and shows current conditions, a 48-hour chart, tomorrow, a 7-day forecast, air quality (PM2.5, PM10, NO₂, O₃) and the past 7 days. |
 | 3 | **Google sign-in** | One-click Google login with database sessions. Guests can still use the map and forecasts. |
 | 4 | **Saved places & compare** | Save home, hostel, village or trip spots, set a default, rename, and compare two places side by side. |
 | 5 | **Daily email & SMS reports** | Choose the place, send time, timezone, days, today/tomorrow forecast, short/detailed format, language and what to include. One-click unsubscribe (email) or reply STOP (SMS). |
 | 6 | **Weather alerts** | Rules such as “rain chance > 70% tomorrow” or “max temperature > 40 °C”, checked hourly, delivered in-app, by email or SMS. |
-| 7 | **Farmer mode** | Spraying, irrigation, heavy-rain and livestock heat advice, in Kannada, Hindi or English. Admins can register SMS-only farmers who have no smartphone or Google account. |
-| 8 | **Admin control room** | Users (last sign-in, approximate location, subscription status, last delivery status), missed-today list with one-click resend, full delivery log with delivery and open tracking from webhooks, scheduler health, and block/unblock and role management. |
-| 9 | **Settings & PWA** | °C/°F, wind units, 12/24-hour time, dark/light theme. Installable on phones and shows the last forecast offline. |
+| 7 | **Severe weather warnings** | Every saved or subscribed place is checked every 30 minutes for **thunderstorms** (incl. hail), **heavy rain** using IMD 24-hour categories (64.5 / 115.6 / 204.5 mm), intense downpours, gales, and **tropical cyclones** within range (live GDACS feed). Users are warned automatically in-app, by email and by SMS (Kannada/Hindi/English, including SMS-only farmers). Warning banners appear on the forecast and map. |
+| 8 | **Farmer mode** | Spraying, irrigation, heavy-rain and livestock heat advice, in Kannada, Hindi or English. Admins can register SMS-only farmers who have no smartphone or Google account. |
+| 9 | **Admin control room** | Users (last sign-in, approximate location, subscription status, last delivery status), missed-today list with one-click resend, full delivery log with delivery and open tracking from webhooks, scheduler health, and block/unblock and role management. |
+| 10 | **Settings & PWA** | °C/°F, wind units, 12/24-hour time, dark/light theme. Installable on phones and shows the last forecast offline. |
 
 ## Tech stack
 
@@ -37,7 +38,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 | Auth | NextAuth (Auth.js) with Google OAuth 2.0 |
 | Email | Resend (SMTP fallback supported), signed delivery webhooks |
 | SMS | textbee.dev Android SMS gateway, signed delivery webhooks |
-| Data | Open-Meteo (forecast, air quality, geocoding), NASA GIBS, RainViewer, Esri, CARTO/OpenStreetMap |
+| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), RainViewer, Esri, CARTO/OpenStreetMap |
 | Hosting | Google Cloud VM + PM2 + Cloudflare Tunnel |
 
 ## Architecture
@@ -52,14 +53,15 @@ Next.js server ── Prisma ── PostgreSQL
    ▼                 │
 Open-Meteo / NASA / RainViewer      Worker (node-cron, every 5 min)
                                       ├─ daily reports → Resend (email) / textbee (SMS)
-                                      └─ alert rules (hourly)
+                                      ├─ alert rules (hourly)
+                                      └─ severe-weather watch (every 30 min: forecast + GDACS cyclones)
 Resend & textbee webhooks → /api/webhooks/* → delivery status (delivered / opened / bounced / failed)
 ```
 
 ### Database tables
 
 `User`, `Account`, `Session`, `VerificationToken` (auth) · `Place` · `Subscription` · `Delivery` ·
-`AlertRule` · `Notification` · `LoginEvent` · `JobRun`. See [`prisma/schema.prisma`](prisma/schema.prisma).
+`AlertRule` · `Notification` · `SevereNotice` · `LoginEvent` · `JobRun`. See [`prisma/schema.prisma`](prisma/schema.prisma).
 
 ### REST API (main endpoints)
 
@@ -71,6 +73,8 @@ Resend & textbee webhooks → /api/webhooks/* → delivery status (delivered / o
 | GET/POST | `/api/places`, PATCH/DELETE `/api/places/:id` | Saved places |
 | GET/POST | `/api/subscriptions`, PATCH/DELETE `/api/subscriptions/:id`, POST `/:id/test` | Email/SMS reports |
 | GET/POST | `/api/alerts`, PATCH/DELETE `/api/alerts/:id` | Alert rules |
+| GET | `/api/warnings?lat&lon` · `/api/cyclones` | Severe-weather warnings and active cyclones |
+| GET | `/api/satellite` | Live satellite sources and animation frames |
 | POST | `/api/admin/resend`, `/api/admin/run`, `/api/admin/subscriptions` | Admin actions |
 | POST | `/api/webhooks/resend`, `/api/webhooks/textbee` | Delivery status callbacks |
 
@@ -96,10 +100,11 @@ Step-by-step guide for Google Cloud + Cloudflare Tunnel: **[docs/DEPLOYMENT.md](
 | Member | Modules |
 |--------|---------|
 | Member 1 | Live weather map · Saved places & compare · Settings / PWA |
-| Member 2 | Google sign-in · Daily email & SMS reports · Weather alerts · Admin control room |
+| Member 2 | Google sign-in · Daily email & SMS reports · Weather alerts & severe-weather warnings · Admin control room |
 | Shared | My weather dashboard, database design, deployment |
 
 ## Credits
 
-Forecast data © [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) · Imagery: NASA EOSDIS GIBS, JMA Himawari,
-Esri · Radar: RainViewer · Map labels © OpenStreetMap contributors © CARTO.
+Forecast data © [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) · Satellite imagery © EUMETSAT, NASA EOSDIS GIBS,
+JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Radar: RainViewer · Map labels © OpenStreetMap contributors © CARTO.
+Warnings are automated guidance; always follow official IMD and local authority advisories.

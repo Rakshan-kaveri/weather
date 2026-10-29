@@ -25,6 +25,7 @@ export type SubForm = {
   includeAqi: boolean;
   includeTips: boolean;
   farmerTips: boolean;
+  severeAlerts: boolean;
 };
 
 export function emptyForm(tz: string, overrides: Partial<SubForm> = {}): SubForm {
@@ -48,6 +49,7 @@ export function emptyForm(tz: string, overrides: Partial<SubForm> = {}): SubForm
     includeAqi: true,
     includeTips: true,
     farmerTips: false,
+    severeAlerts: true,
     ...overrides,
   };
 }
@@ -236,11 +238,13 @@ export function SubscriptionFields({
               ["includeAqi", "Air quality"],
               ["includeTips", "Umbrella / heat tips"],
               ["farmerTips", "Farmer advice"],
+              ["severeAlerts", "Storm, heavy-rain & cyclone warnings"],
             ] as const
           ).map(([k, label]) => (
             <label key={k} className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-ink-700 bg-ink-800 px-3 py-2 text-sm">
               <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--accent))]" checked={form[k]} onChange={(e) => set({ [k]: e.target.checked } as Partial<SubForm>)} />
               {k === "farmerTips" && <Icon name="leaf" size={15} className="text-good" />}
+              {k === "severeAlerts" && <Icon name="storm" size={15} className="text-warn" />}
               {label}
             </label>
           ))}
@@ -271,5 +275,6 @@ export function formToPayload(f: SubForm) {
     includeAqi: f.includeAqi,
     includeTips: f.includeTips,
     farmerTips: f.farmerTips,
+    severeAlerts: f.severeAlerts,
   };
 }

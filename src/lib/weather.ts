@@ -36,6 +36,7 @@ export type HourPoint = {
   weatherCode: number;
   windSpeed: number;
   windDirection: number;
+  windGusts: number;
   humidity: number;
   uvIndex: number;
   cloudCover: number;
@@ -143,6 +144,7 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
         "weather_code",
         "wind_speed_10m",
         "wind_direction_10m",
+        "wind_gusts_10m",
         "relative_humidity_2m",
         "uv_index",
         "visibility",
@@ -175,6 +177,7 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
       weatherCode: h.weather_code[i],
       windSpeed: h.wind_speed_10m[i],
       windDirection: h.wind_direction_10m[i],
+      windGusts: h.wind_gusts_10m?.[i] ?? 0,
       humidity: h.relative_humidity_2m[i],
       uvIndex: h.uv_index[i] ?? 0,
       cloudCover: h.cloud_cover[i] ?? 0,

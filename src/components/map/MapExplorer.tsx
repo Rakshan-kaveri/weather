@@ -11,6 +11,7 @@ import { temp as fmtTemp, wind as fmtWind } from "@/lib/units";
 import { SearchBox, type PickedPlace } from "./SearchBox";
 import { PointPanel } from "./PointPanel";
 import { toast } from "../Toast";
+import type { SatSource } from "@/lib/satellite";
 
 type RadarFrame = { time: number; url: string };
 type Selected = { lat: number; lon: number; name?: string; region?: string; country?: string };
@@ -18,17 +19,7 @@ type Selected = { lat: number; lon: number; name?: string; region?: string; coun
 const INDIA: [number, number] = [21.5, 79];
 const LAYER_KEY = "skycast:layer";
 
-function yesterdayUtc() {
-  const d = new Date(Date.now() - 24 * 3600_000);
-  return d.toISOString().slice(0, 10);
-}
-
-/** Latest Himawari full-disk scan that GIBS has published (scans every 10 min, ~40 min delay). */
-function himawariTime() {
-  const d = new Date(Date.now() - 50 * 60_000);
-  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
-  return d.toISOString().slice(0, 19) + "Z";
-}
+type Cyclone = { id: string; name: string; alertLevel: "Green" | "Orange" | "Red"; lat: number; lon: number; severity: string; link: string };
 
 export default function MapExplorer() {
   const { prefs } = usePrefs();
@@ -36,14 +27,18 @@ export default function MapExplorer() {
   const mapRef = useRef<L.Map | null>(null);
   const heatRef = useRef<HTMLCanvasElement | null>(null);
   const flowRef = useRef<HTMLCanvasElement | null>(null);
-  const satRef = useRef<{ visible: L.TileLayer; infrared: L.TileLayer } | null>(null);
+  const satLayers = useRef<L.TileLayer[]>([]);
+  const cycloneLayer = useRef<L.LayerGroup | null>(null);
   const radarLayers = useRef<L.TileLayer[]>([]);
   const markerRef = useRef<L.Marker | null>(null);
   const rafRef = useRef<number>(0);
   const gridKey = useRef("");
 
   const [layer, setLayer] = useState<LayerId>("wind");
-  const [satMode, setSatMode] = useState<"visible" | "infrared">("visible");
+  const [satSources, setSatSources] = useState<SatSource[]>([]);
+  const [satId, setSatId] = useState<SatSource["id"] | null>(null);
+  const [satIdx, setSatIdx] = useState(0);
+  const [cyclones, setCyclones] = useState<Cyclone[]>([]);
   const [grid, setGrid] = useState<GridData | null>(null);
   const [gridLoading, setGridLoading] = useState(false);
   const [timeIdx, setTimeIdx] = useState(0);
@@ -92,17 +87,10 @@ export default function MapExplorer() {
       attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
     }).addTo(map);
 
-    // Recent satellite imagery from NASA GIBS (shown on the Satellite layer)
+    // Live satellite frames (EUMETSAT / NASA) are added on the Satellite layer
     map.createPane("sat").style.zIndex = "250";
-    const visible = L.tileLayer(
-      "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/{time}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg",
-      { pane: "sat", maxNativeZoom: 9, maxZoom: 12, opacity: 0.95, time: yesterdayUtc(), attribution: "NASA EOSDIS GIBS" } as L.TileLayerOptions,
-    );
-    const infrared = L.tileLayer(
-      "https://gibs.earthdata.nasa.gov/wmts/epsg3857/all/Himawari_AHI_Band13_Clean_Infrared_v0_NRT_ZENJPEG/default/{time}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.jpg",
-      { pane: "sat", maxNativeZoom: 6, maxZoom: 12, opacity: 0.85, time: himawariTime(), attribution: "NASA GIBS · JMA Himawari" } as L.TileLayerOptions,
-    );
-    satRef.current = { visible, infrared };
+    map.createPane("cyclones").style.zIndex = "620";
+    cycloneLayer.current = L.layerGroup([], { pane: "cyclones" }).addTo(map);
 
     // Overlay panes for the weather canvases, under the place labels
     const heatPane = map.createPane("heat");
@@ -161,15 +149,85 @@ export default function MapExplorer() {
     }).addTo(map);
   }, [selected]);
 
-  /* ─── Satellite layer ─────────────────────────────────── */
+  /* ─── Live satellite clouds ───────────────────────────── */
+  useEffect(() => {
+    if (layer !== "satellite" || satSources.length) return;
+    fetch("/api/satellite")
+      .then((r) => r.json())
+      .then((d: { sources: SatSource[] }) => {
+        setSatSources(d.sources ?? []);
+        setSatId((id) => id ?? d.sources?.[0]?.id ?? null);
+      })
+      .catch(() => {});
+  }, [layer, satSources.length]);
+
+  const sat = satSources.find((x) => x.id === satId) ?? null;
+
   useEffect(() => {
     const map = mapRef.current;
-    const sat = satRef.current;
-    if (!map || !sat) return;
-    sat.visible.remove();
-    sat.infrared.remove();
-    if (layer === "satellite") (satMode === "visible" ? sat.visible : sat.infrared).addTo(map);
-  }, [layer, satMode]);
+    if (!map) return;
+    satLayers.current.forEach((l) => l.remove());
+    satLayers.current = [];
+    if (layer !== "satellite" || !sat) return;
+    // One tile layer per frame, all loaded up front, so playback is smooth (clouds visibly move).
+    satLayers.current = sat.frames.map((time) =>
+      sat.kind === "wms"
+        ? L.tileLayer
+            .wms(sat.url, {
+              pane: "sat",
+              layers: sat.layer!,
+              format: "image/png",
+              transparent: true,
+              version: "1.3.0",
+              opacity: 0,
+              maxNativeZoom: sat.maxNativeZoom,
+              maxZoom: 12,
+              attribution: sat.attribution,
+              ...(time ? { time } : {}),
+            } as L.WMSOptions)
+            .addTo(map)
+        : L.tileLayer(sat.url, { pane: "sat", opacity: 0, maxNativeZoom: sat.maxNativeZoom, maxZoom: 12, attribution: sat.attribution, time } as L.TileLayerOptions).addTo(map),
+    );
+    setSatIdx(sat.frames.length - 1);
+    if (sat.frames.length > 1) setPlaying(true);
+  }, [layer, sat]);
+
+  useEffect(() => {
+    if (!sat) return;
+    satLayers.current.forEach((l, i) => l.setOpacity(i === satIdx ? sat.opacity : 0));
+  }, [satIdx, sat]);
+
+  /* ─── Active cyclones (GDACS) — shown on every layer ─── */
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/cyclones")
+        .then((r) => r.json())
+        .then((d: { cyclones: Cyclone[] }) => setCyclones(d.cyclones ?? []))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 15 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const group = cycloneLayer.current;
+    if (!group) return;
+    group.clearLayers();
+    const color = { Green: "#3ecf8e", Orange: "#ff9a3c", Red: "#ff5a5a" };
+    for (const c of cyclones) {
+      const icon = L.divIcon({
+        className: "",
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+        html: `<div class="cyclone-marker" style="--c:${color[c.alertLevel]}"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M5 9c2-5 9-6 12-2M19 15c-2 5-9 6-12 2M9 4c-4 3-4 9 0 11M15 20c4-3 4-9 0-11"/></svg></div>`,
+      });
+      L.marker([c.lat, c.lon], { icon, pane: "cyclones", title: c.name })
+        .bindPopup(
+          `<strong>Cyclone ${escapeHtml(c.name)}</strong><br>${c.alertLevel} alert${c.severity ? ` · ${escapeHtml(c.severity)}` : ""}<br><a href="${c.link}" target="_blank" rel="noreferrer">Track & impact (GDACS)</a>`,
+        )
+        .addTo(group);
+    }
+  }, [cyclones]);
 
   /* ─── Forecast grid for the visible area ──────────────── */
   const loadGrid = useCallback(async () => {
@@ -389,10 +447,11 @@ export default function MapExplorer() {
     if (!playing) return;
     const t = setInterval(() => {
       if (layer === "radar") setRadarIdx((i) => (radar.length ? (i + 1) % radar.length : 0));
+      else if (layer === "satellite") setSatIdx((i) => (sat?.frames.length ? (i + 1) % sat.frames.length : 0));
       else if (grid) setTimeIdx((i) => (i + 1) % grid.times.length);
-    }, layer === "radar" ? 600 : 900);
+    }, layer === "radar" || layer === "satellite" ? 600 : 900);
     return () => clearInterval(t);
-  }, [playing, layer, grid, radar.length]);
+  }, [playing, layer, grid, radar.length, sat]);
 
   /* ─── Actions ─────────────────────────────────────────── */
   const flyTo = (p: PickedPlace) => {
@@ -419,7 +478,18 @@ export default function MapExplorer() {
         note: "Past 2 hours",
       };
     }
-    if (layer === "satellite") return null;
+    if (layer === "satellite") {
+      if (!sat) return { count: 0, idx: 0, set: setSatIdx, label: "Loading live satellite…", note: "" };
+      const t = sat.frames[satIdx];
+      const ms = t && t.length > 10 ? Date.parse(t) : NaN;
+      return {
+        count: sat.frames.length,
+        idx: satIdx,
+        set: setSatIdx,
+        label: Number.isFinite(ms) ? fmtTime(ms) : sat.label,
+        note: sat.note,
+      };
+    }
     return {
       count: grid?.times.length ?? 0,
       idx: timeIdx,
@@ -427,7 +497,7 @@ export default function MapExplorer() {
       label: grid ? fmtTime(Date.parse(grid.times[timeIdx])) : "Loading forecast…",
       note: grid ? relHours(Date.parse(grid.times[timeIdx])) : "",
     };
-  }, [layer, radar, radarIdx, grid, timeIdx]);
+  }, [layer, radar, radarIdx, grid, timeIdx, sat, satIdx]);
 
   return (
     <div className="fixed inset-0 bg-black">
@@ -464,19 +534,6 @@ export default function MapExplorer() {
             <span>{l.label}</span>
           </button>
         ))}
-        {layer === "satellite" && (
-          <div className="mt-1 hidden flex-col gap-1 border-t border-white/10 pt-2 sm:flex">
-            {(["visible", "infrared"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setSatMode(m)}
-                className={`rounded-lg px-3 py-1.5 text-left text-xs ${satMode === m ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
-              >
-                {m === "visible" ? "True colour (daily)" : "Infrared (live)"}
-              </button>
-            ))}
-          </div>
-        )}
       </nav>
 
       {/* Legend */}
@@ -498,6 +555,24 @@ export default function MapExplorer() {
       {/* Timeline */}
       {timeline && (
         <div className="glass absolute bottom-3 left-3 right-3 z-[1000] rounded-2xl px-3 py-2.5 sm:left-1/2 sm:right-auto sm:w-[620px] sm:-translate-x-1/2">
+          {layer === "satellite" && satSources.length > 0 && (
+            <div className="mb-2 flex gap-1 overflow-x-auto scrollbar-thin" role="tablist" aria-label="Satellite source">
+              {satSources.map((src) => (
+                <button
+                  key={src.id}
+                  role="tab"
+                  aria-selected={src.id === satId}
+                  onClick={() => {
+                    setPlaying(false);
+                    setSatId(src.id);
+                  }}
+                  className={`shrink-0 rounded-lg px-2.5 py-1 text-xs ${src.id === satId ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
+                >
+                  {src.label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setPlaying((p) => !p)}
@@ -511,7 +586,7 @@ export default function MapExplorer() {
               <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
                 <span className="truncate font-medium text-white">{timeline.label}</span>
                 <span className="shrink-0 text-xs text-white/60">
-                  {gridLoading && layer !== "radar" ? "Updating…" : timeline.note}
+                  {gridLoading && def.gridVar ? "Updating…" : timeline.note}
                 </span>
               </div>
               <input
@@ -530,19 +605,6 @@ export default function MapExplorer() {
           </div>
         </div>
       )}
-      {layer === "satellite" && (
-        <div className="glass absolute bottom-3 left-3 right-3 z-[1000] rounded-2xl px-4 py-3 text-sm text-white/80 sm:left-1/2 sm:right-auto sm:w-[520px] sm:-translate-x-1/2">
-          <div className="flex items-center justify-between gap-3">
-            <span>
-              {satMode === "visible" ? `NASA VIIRS true-colour mosaic · ${yesterdayUtc()}` : `Himawari infrared · ${fmtTime(Date.parse(himawariTime()))}`}
-            </span>
-            <button className="text-xs text-accent sm:hidden" onClick={() => setSatMode((m) => (m === "visible" ? "infrared" : "visible"))}>
-              Switch
-            </button>
-          </div>
-        </div>
-      )}
-
       {selected && <PointPanel point={selected} onClose={() => setSelected(null)} />}
     </div>
   );
@@ -552,6 +614,10 @@ export default function MapExplorer() {
 
 function alertOnce() {
   toast("Location access is blocked. Allow it in your browser to see your local weather.", "error");
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 function wrapLon(lon: number) {

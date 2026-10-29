@@ -192,3 +192,26 @@ input[type="range"].timeline::-moz-range-thumb {
     display: none;
   }
 }
+
+/* Active cyclone marker (spins slowly, coloured by GDACS alert level) */
+.cyclone-marker {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  color: var(--c);
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.55) 40%, transparent 72%);
+  filter: drop-shadow(0 0 6px var(--c));
+  animation: cyclone-spin 4s linear infinite;
+}
+@keyframes cyclone-spin {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cyclone-marker {
+    animation: none;
+  }
+}

@@ -117,3 +117,34 @@ export const STRINGS: Record<Lang, Strings> = {
 };
 
 export const LANG_NAMES: Record<Lang, string> = { en: "English", kn: "ಕನ್ನಡ (Kannada)", hi: "हिन्दी (Hindi)" };
+
+/** Short SMS wording for severe-weather warnings. */
+export const SEVERE_SMS: Record<Lang, Record<"thunderstorm" | "heavy_rain" | "downpour" | "strong_wind" | "cyclone" | "prefix" | "safety", string>> = {
+  en: {
+    prefix: "WEATHER WARNING",
+    thunderstorm: "Thunderstorm expected",
+    heavy_rain: "Heavy rain expected",
+    downpour: "Intense downpour expected",
+    strong_wind: "Strong winds expected",
+    cyclone: "Cyclone nearby",
+    safety: "Stay safe, follow local advisories.",
+  },
+  kn: {
+    prefix: "ಹವಾಮಾನ ಎಚ್ಚರಿಕೆ",
+    thunderstorm: "ಗುಡುಗು ಸಹಿತ ಮಳೆ ಸಾಧ್ಯತೆ",
+    heavy_rain: "ಭಾರೀ ಮಳೆ ಸಾಧ್ಯತೆ",
+    downpour: "ಅತಿ ತೀವ್ರ ಮಳೆ ಸಾಧ್ಯತೆ",
+    strong_wind: "ಬಲವಾದ ಗಾಳಿ ಸಾಧ್ಯತೆ",
+    cyclone: "ಚಂಡಮಾರುತ ಹತ್ತಿರದಲ್ಲಿದೆ",
+    safety: "ಸುರಕ್ಷಿತವಾಗಿರಿ, ಸ್ಥಳೀಯ ಸೂಚನೆಗಳನ್ನು ಪಾಲಿಸಿ.",
+  },
+  hi: {
+    prefix: "मौसम चेतावनी",
+    thunderstorm: "आंधी-तूफ़ान की संभावना",
+    heavy_rain: "भारी बारिश की संभावना",
+    downpour: "बहुत तेज़ बारिश की संभावना",
+    strong_wind: "तेज़ हवाओं की संभावना",
+    cyclone: "चक्रवात पास में है",
+    safety: "सुरक्षित रहें, स्थानीय निर्देशों का पालन करें।",
+  },
+};

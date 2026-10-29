@@ -54,7 +54,7 @@ export function PreviewButton({ subscriptionId }: { subscriptionId: string }) {
   );
 }
 
-export function RunJobButton({ job, label }: { job: "daily-reports" | "alerts"; label: string }) {
+export function RunJobButton({ job, label }: { job: "daily-reports" | "alerts" | "severe-weather"; label: string }) {
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   return (

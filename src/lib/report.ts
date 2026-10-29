@@ -183,3 +183,23 @@ export function alertHtml(title: string, body: string, link: string) {
 <tr><td style="padding:14px 24px;border-top:1px solid #1f2a3d;font-size:12px;color:#66728a">Manage alerts at <a href="${config.appUrl}/alerts" style="color:#8fb8ff">${config.appUrl.replace(/^https?:\/\//, "")}/alerts</a></td></tr>
 </table></td></tr></table></body></html>`;
 }
+
+/** Email for automatic severe-weather warnings. */
+export function severeHtml(w: { title: string; message: string; level: string; startsAt?: string; date: string; link?: string }, place: string, link: string) {
+  const color = w.level === "severe" ? "#ff5a5a" : w.level === "warning" ? "#ff9a3c" : "#f5c542";
+  const label = w.level === "severe" ? "SEVERE WARNING" : w.level === "warning" ? "WARNING" : "WATCH";
+  return `<!doctype html><html><body style="margin:0;background:#0a0f1a;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e8edf6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#111827;border:1px solid #1f2a3d;border-top:4px solid ${color};border-radius:14px">
+<tr><td style="padding:18px 24px;border-bottom:1px solid #1f2a3d;font-weight:700">${APP_NAME} <span style="float:right;color:${color};font-size:12px;letter-spacing:.1em">${label}</span></td></tr>
+<tr><td style="padding:24px">
+<div style="font-size:13px;color:#7f8ba3;text-transform:uppercase;letter-spacing:.08em">${esc(place)}</div>
+<div style="font-size:22px;font-weight:700;color:${color};margin-top:6px">${esc(w.title)}</div>
+${w.startsAt ? `<div style="font-size:14px;color:#cfd7e6;margin-top:6px">From ${esc(w.startsAt.replace("T", " "))} local time</div>` : ""}
+<p style="font-size:15px;line-height:1.6;color:#dbe6f7">${esc(w.message)}</p>
+<a href="${link}" style="display:inline-block;background:#4ea8ff;color:#06101f;text-decoration:none;font-weight:600;font-size:14px;padding:10px 18px;border-radius:8px">Open forecast</a>
+${w.link ? ` <a href="${w.link}" style="display:inline-block;margin-left:8px;color:#8fb8ff;font-size:14px">Cyclone report (GDACS)</a>` : ""}
+</td></tr>
+<tr><td style="padding:14px 24px;border-top:1px solid #1f2a3d;font-size:12px;color:#66728a;line-height:1.6">Automatic warning for a place saved in your account. Always follow official IMD and local authority advisories.<br>Turn these off in <a href="${config.appUrl}/settings" style="color:#8fb8ff">Settings</a>.</td></tr>
+</table></td></tr></table></body></html>`;
+}

@@ -7,6 +7,7 @@ import { Icon } from "../Icon";
 import { WeatherIcon } from "../WeatherIcon";
 import { usePrefs } from "../Providers";
 import { api, toast } from "../Toast";
+import { SevereBanner } from "../SevereBanner";
 import { aqiLevel, compass, describe } from "@/lib/codes";
 import { hourLabel, temp, wind } from "@/lib/units";
 import type { AirQuality, Forecast } from "@/lib/weather";
@@ -89,6 +90,9 @@ export function PointPanel({ point, onClose }: { point: Point; onClose: () => vo
 
       {c && data && (
         <>
+          <div className="mt-3">
+            <SevereBanner lat={point.lat} lon={point.lon} compact />
+          </div>
           <div className="mt-3 flex items-center gap-3">
             <WeatherIcon code={c.weatherCode} isDay={c.isDay} size={56} />
             <div>

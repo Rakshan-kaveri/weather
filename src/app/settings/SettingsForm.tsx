@@ -4,6 +4,9 @@ import { useState } from "react";
 import { usePrefs } from "@/components/Providers";
 import { api, toast } from "@/components/Toast";
 import type { Prefs } from "@/lib/units";
+import { Icon } from "@/components/Icon";
+
+type Severe = { severeInApp: boolean; severeEmail: boolean; severeSms: boolean };
 
 function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { v: T; label: string }[]; onChange: (v: T) => void; label: string }) {
   return (
@@ -23,7 +26,18 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
   );
 }
 
-export function SettingsForm({ name: initialName, email, phone: initialPhone }: { name: string; email: string; phone: string }) {
+export function SettingsForm({ name: initialName, email, phone: initialPhone, severe: initialSevere }: { name: string; email: string; phone: string; severe: Severe }) {
+  const [severe, setSevere] = useState<Severe>(initialSevere);
+  const toggleSevere = async (k: keyof Severe) => {
+    const next = { ...severe, [k]: !severe[k] };
+    try {
+      await api("/api/settings", { method: "PATCH", json: { [k]: next[k] } });
+      setSevere(next);
+      toast("Warning settings saved");
+    } catch {
+      /* toast shown */
+    }
+  };
   const { prefs, setPrefs } = usePrefs();
   const [name, setName] = useState(initialName);
   const [phone, setPhone] = useState(initialPhone);
@@ -81,6 +95,31 @@ export function SettingsForm({ name: initialName, email, phone: initialPhone }: 
           </div>
           <Segmented<Prefs["theme"]> label="Theme" value={prefs.theme} onChange={(v) => setPrefs({ theme: v })} options={[{ v: "dark", label: "Dark" }, { v: "light", label: "Light" }]} />
         </div>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-fg-muted">
+          <Icon name="storm" size={16} className="text-warn" /> Severe weather warnings
+        </h2>
+        <p className="mt-1 text-sm text-fg-muted">
+          We watch every place you&apos;ve saved or subscribed to and warn you before thunderstorms, heavy rain (IMD categories), strong winds or a
+          nearby cyclone hit. Checked every 30 minutes.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(
+            [
+              ["severeInApp", "In-app", "bell"],
+              ["severeEmail", "Email", "mail"],
+              ["severeSms", "SMS", "sms"],
+            ] as const
+          ).map(([k, label, icon]) => (
+            <label key={k} className="flex cursor-pointer items-center gap-2 rounded-lg border border-ink-700 bg-ink-800 px-3 py-2 text-sm">
+              <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--accent))]" checked={severe[k]} onChange={() => toggleSevere(k)} />
+              <Icon name={icon} size={15} /> {label}
+            </label>
+          ))}
+        </div>
+        {!phone && <p className="mt-2 text-xs text-fg-faint">Add your mobile number below to receive SMS warnings.</p>}
       </section>
 
       <form onSubmit={saveProfile} className="card grid gap-4 p-5">

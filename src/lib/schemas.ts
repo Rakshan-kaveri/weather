@@ -32,6 +32,7 @@ export const subscriptionSchema = z.object({
   includeAqi: z.boolean(),
   includeTips: z.boolean(),
   farmerTips: z.boolean(),
+  severeAlerts: z.boolean().optional(),
   active: z.boolean().optional(),
 });
 
@@ -55,6 +56,9 @@ export const settingsSchema = z.object({
   windUnit: z.enum(["kmh", "ms", "mph", "kn"]).optional(),
   timeFormat: z.enum(["12", "24"]).optional(),
   theme: z.enum(["dark", "light"]).optional(),
+  severeInApp: z.boolean().optional(),
+  severeEmail: z.boolean().optional(),
+  severeSms: z.boolean().optional(),
   phone: z.string().max(20).optional().nullable(),
   name: z.string().trim().min(1).max(80).optional(),
 });

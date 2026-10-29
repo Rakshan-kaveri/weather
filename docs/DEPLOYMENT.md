@@ -181,11 +181,25 @@ curl localhost:3000/api/health   # {"ok":true,"db":"up"}
 cd ~/weather && git pull && npm install && npx prisma db push && npm run build && pm2 restart all
 ```
 
+## Live satellite & severe-weather data
+
+No keys or sign-ups needed. The server reads:
+
+- **EUMETSAT EUMETView** (`view.eumetsat.int`): Meteosat Indian Ocean and global infrared cloud imagery. Layer names
+  and frame times are read from EUMETSAT's live capabilities list every 30 minutes, so the animation always uses real frames.
+- **NASA GIBS**: Himawari infrared (10-minute scans) and daily VIIRS true colour.
+- **GDACS** (`gdacs.org`): active tropical cyclones, checked every 30 minutes.
+
+The worker scans for thunderstorms, heavy rain, gales and cyclones every 30 minutes (`pm2 logs skycast-worker`).
+In the admin panel, **Scan severe weather** runs it immediately.
+
 ## Demo checklist (for evaluation)
 
-1. **Map:** switch layers, press play on the timeline, click a place.
+1. **Map:** open **Satellite** and the clouds animate over India; switch to Wind/Temperature, press play, click a place
+   (warnings show at the top of the panel; active cyclones appear as spinning markers).
 2. **Dashboard:** allow location → current, 48 h, 7-day, AQI, history.
 3. **Sign in** with Google → save two places → **Compare**.
 4. **Reports:** create an email report and an SMS report (Kannada + farmer mode) → **Send now**.
 5. **Alerts:** create "Rain chance > 10% tomorrow" → Admin → **Check alerts now** → the bell shows it.
-6. **Admin:** Users (last sign-in, location, report status) → Delivery log (delivered/opened) → Missed today → Resend.
+6. **Severe weather:** Admin → **Scan severe weather**; the "Severe-weather warnings sent" table and users' bells update.
+7. **Admin:** Users (last sign-in, location, report status) → Delivery log (delivered/opened) → Missed today → Resend.

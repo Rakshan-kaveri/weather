@@ -7,13 +7,14 @@ export const dynamic = "force-dynamic";
 
 export const GET = handler(async () => {
   const u = await apiUser();
-  return json({ tempUnit: u.tempUnit, windUnit: u.windUnit, timeFormat: u.timeFormat, theme: u.theme, phone: u.phone, name: u.name });
+  return json({ tempUnit: u.tempUnit, windUnit: u.windUnit, timeFormat: u.timeFormat, theme: u.theme, phone: u.phone, name: u.name, severeInApp: u.severeInApp, severeEmail: u.severeEmail, severeSms: u.severeSms });
 });
 
 export const PATCH = handler(async (req: Request) => {
   const user = await apiUser();
   const data = await body(req, settingsSchema);
   const update: Record<string, unknown> = { ...data };
+  if (data.severeSms && !(data.phone ?? user.phone)) throw new HttpError(400, "Add your mobile number first to get SMS warnings.");
   if (data.phone !== undefined) {
     if (data.phone === null || data.phone === "") update.phone = null;
     else {
@@ -23,5 +24,5 @@ export const PATCH = handler(async (req: Request) => {
     }
   }
   const u = await prisma.user.update({ where: { id: user.id }, data: update });
-  return json({ tempUnit: u.tempUnit, windUnit: u.windUnit, timeFormat: u.timeFormat, theme: u.theme, phone: u.phone, name: u.name });
+  return json({ tempUnit: u.tempUnit, windUnit: u.windUnit, timeFormat: u.timeFormat, theme: u.theme, phone: u.phone, name: u.name, severeInApp: u.severeInApp, severeEmail: u.severeEmail, severeSms: u.severeSms });
 });

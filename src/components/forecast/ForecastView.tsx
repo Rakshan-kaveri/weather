@@ -11,6 +11,7 @@ import { aqiLevel, compass, describe, uvLevel } from "@/lib/codes";
 import { clock, dateLabel, dayName, temp, wind } from "@/lib/units";
 import type { AirQuality, Forecast, HistoryDay } from "@/lib/weather";
 import { HourlyChart, HistoryChart } from "./Charts";
+import { SevereBanner } from "../SevereBanner";
 
 export type Loc = { lat: number; lon: number; name: string; region?: string | null; country?: string | null };
 
@@ -92,6 +93,7 @@ export function ForecastView({ loc, compact = false }: { loc: Loc; compact?: boo
   return (
     <div className="grid gap-4">
       {error && <div className="rounded-xl border border-warn/40 bg-warn/10 px-4 py-2 text-sm text-warn">{error}</div>}
+      <SevereBanner lat={loc.lat} lon={loc.lon} />
 
       {/* Now */}
       <section className="card overflow-hidden" aria-labelledby="now-h">
