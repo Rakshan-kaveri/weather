@@ -101,12 +101,13 @@ export async function runSevereWatch() {
       if (!cache.has(pk)) {
         try {
           const fc = await getForecast(t.lat, t.lon);
-          cache.set(pk, [...cycloneWarnings(t.lat, t.lon, cyclones, fc.current.time.slice(0, 10)), ...assessForecast(fc)]);
+          cache.set(pk, [...(await cycloneWarnings(t.lat, t.lon, cyclones, fc.current.time.slice(0, 10))), ...assessForecast(fc)]);
         } catch {
           cache.set(pk, []);
         }
       }
-      const warnings = (cache.get(pk) ?? []).filter((w) => LEVEL_RANK[w.level] >= LEVEL_RANK.warning || w.type === "cyclone");
+      // Only "warning" and "severe" are sent; "watch" (e.g. a cyclone 300–500 km away) stays a banner on the site.
+      const warnings = (cache.get(pk) ?? []).filter((w) => LEVEL_RANK[w.level] >= LEVEL_RANK.warning);
       for (const w of warnings) {
         processed++;
         const key = `${t.key}:${pk}:${w.type}:${w.level}:${w.date}`;

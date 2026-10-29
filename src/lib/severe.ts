@@ -172,28 +172,87 @@ export function distanceKm(aLat: number, aLon: number, bLat: number, bLon: numbe
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
-const CYCLONE_RADIUS_KM = { Green: 400, Orange: 700, Red: 1000 };
+/* Distances that trigger cyclone warnings, measured to the nearest point of the cyclone's current position
+   OR its forecast track (so a storm heading your way warns you early, and a far-away one doesn't). */
+const CYCLONE_SEVERE_KM = 150;
+const CYCLONE_WARNING_KM = 300;
+const CYCLONE_WATCH_KM = 500; // shown as a banner on the forecast page only, never emailed/SMSed
 
-export function cycloneWarnings(lat: number, lon: number, cyclones: Cyclone[], today: string): Warning[] {
-  return cyclones
-    .map((c) => ({ c, d: distanceKm(lat, lon, c.lat, c.lon) }))
-    .filter(({ c, d }) => d <= CYCLONE_RADIUS_KM[c.alertLevel])
-    .map(({ c, d }) => ({
-      type: "cyclone" as const,
-      level: (c.alertLevel === "Red" || d < 300 ? "severe" : c.alertLevel === "Orange" ? "warning" : "watch") as Level,
-      title: `Cyclone ${c.name} ${Math.round(d)} km away`,
-      message: `Tropical cyclone ${c.name} (${c.alertLevel} alert${c.severity ? `, ${c.severity}` : ""}) is ${Math.round(d)} km from this place. Follow IMD and district administration advisories, keep phones charged, store drinking water and stay away from the coast.`,
+function pointInRing(lon: number, lat: number, ring: number[][]) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-12) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function inPolygon(lon: number, lat: number, g: { type: string; coordinates: unknown }) {
+  const polys = (g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : []) as number[][][][];
+  return polys.some((p) => p.length && pointInRing(lon, lat, p[0]));
+}
+
+export async function cycloneWarnings(lat: number, lon: number, cyclones: Cyclone[], today: string): Promise<Warning[]> {
+  const out: Warning[] = [];
+  for (const c of cyclones) {
+    const now = distanceKm(lat, lon, c.lat, c.lon);
+    if (now > 2500) continue; // nowhere near — skip the track lookup entirely
+
+    let closest = now;
+    let closestTime: string | undefined;
+    let inCone = false;
+    try {
+      const track = await cycloneTrack(c.id, c.episodeId);
+      for (const f of track) {
+        if (f.kind === "point" && f.geometry.type === "Point") {
+          const [plon, plat] = f.geometry.coordinates as number[];
+          const d = distanceKm(lat, lon, plat, plon);
+          if (d < closest) {
+            closest = d;
+            closestTime = f.time;
+          }
+        } else if (f.kind === "area" && f.level === "cone" && inPolygon(lon, lat, f.geometry)) {
+          inCone = true;
+        }
+      }
+    } catch {
+      /* no track — use current position only */
+    }
+
+    const km = Math.round(closest);
+    let level: Level | null = null;
+    if (closest <= CYCLONE_SEVERE_KM || (inCone && closest <= CYCLONE_WARNING_KM)) level = "severe";
+    else if (closest <= CYCLONE_WARNING_KM || inCone) level = "warning";
+    else if (closest <= CYCLONE_WATCH_KM) level = "watch";
+    if (!level) continue;
+
+    const approaching = closest < now - 25;
+    const when = closestTime ? ` around ${closestTime.replace("T", " ").slice(5, 16)}` : "";
+    out.push({
+      type: "cyclone",
+      level,
+      title: approaching ? `Cyclone ${c.name} forecast to pass ${km} km away` : `Cyclone ${c.name} ${km} km away`,
+      message:
+        (approaching
+          ? `Tropical cyclone ${c.name} is now ${Math.round(now)} km away and forecast to pass about ${km} km from this place${when}.`
+          : `Tropical cyclone ${c.name} is ${km} km from this place.`) +
+        (inCone ? " This place is inside the forecast cone." : "") +
+        ` GDACS ${c.alertLevel} alert${c.severity ? ` (${c.severity})` : ""}.` +
+        (level === "watch" ? " Keep an eye on updates." : " Follow IMD and district administration advisories, keep phones charged, store drinking water and stay away from the coast."),
       date: today,
-      source: "gdacs" as const,
+      source: "gdacs",
       link: c.link,
-    }));
+    });
+  }
+  return out;
 }
 
 /** All warnings for one place (forecast rules + nearby cyclones). */
 export async function warningsFor(lat: number, lon: number): Promise<Warning[]> {
   const [fc, cyclones] = await Promise.all([getForecast(lat, lon), activeCyclones().catch(() => [])]);
   const today = fc.current.time.slice(0, 10);
-  const list = [...cycloneWarnings(lat, lon, cyclones, today), ...assessForecast(fc)];
+  const list = [...(await cycloneWarnings(lat, lon, cyclones, today)), ...assessForecast(fc)];
   return list.sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level]);
 }
 
