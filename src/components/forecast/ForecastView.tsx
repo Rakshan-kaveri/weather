@@ -8,7 +8,7 @@ import { WeatherIcon } from "../WeatherIcon";
 import { usePrefs } from "../Providers";
 import { api, toast } from "../Toast";
 import { aqiLevel, compass, describe, uvLevel } from "@/lib/codes";
-import { clock, dateLabel, dayName, temp, wind } from "@/lib/units";
+import { clock, dateLabel, dayName, hourLabel, rainWindow, shortDate, temp, wind } from "@/lib/units";
 import type { AirQuality, Forecast, HistoryDay } from "@/lib/weather";
 import { HourlyChart, HistoryChart } from "./Charts";
 import { SevereBanner } from "../SevereBanner";
@@ -87,6 +87,16 @@ export function ForecastView({ loc, compact = false }: { loc: Loc; compact?: boo
   const nowIdx = Math.max(0, f.hourly.findIndex((h) => h.time.slice(0, 13) === c.time.slice(0, 13)));
   const next48 = f.hourly.slice(nowIdx, nowIdx + 48);
   const aq = aqiLevel(air?.usAqi);
+  // Tomorrow: when the rain is expected, and a plain-language label for "sunny with a brief shower" days
+  const tmrHours = tomorrow ? f.hourly.filter((h) => h.time.startsWith(tomorrow.date)) : [];
+  const tmrRain = rainWindow(tmrHours);
+  const tmrDayCloud = tmrHours.filter((h) => +h.time.slice(11, 13) >= 8 && +h.time.slice(11, 13) <= 17).reduce((a, h, _, arr) => a + h.cloudCover / arr.length, 0);
+  const tmrLabel =
+    tomorrow && tomorrow.weatherCode === 80 && tomorrow.precipSum < 2.5 && tmrDayCloud < 60
+      ? `Mostly sunny, brief shower${tmrRain ? ` ${tmrRain}` : ""}`
+      : tomorrow
+        ? describe(tomorrow.weatherCode).label
+        : "";
   const mapHref = `/?lat=${loc.lat}&lon=${loc.lon}&name=${encodeURIComponent(loc.name)}`;
   const q = `lat=${loc.lat}&lon=${loc.lon}&name=${encodeURIComponent(loc.name)}`;
 
@@ -164,7 +174,10 @@ export function ForecastView({ loc, compact = false }: { loc: Loc; compact?: boo
         <div className="mt-3 flex gap-1 overflow-x-auto pb-2 scrollbar-thin">
           {next48.map((h, i) => (
             <div key={h.time} className={`flex w-14 shrink-0 flex-col items-center rounded-xl py-2 ${i === 0 ? "bg-accent/10" : ""}`}>
-              <span className="text-[11px] text-fg-faint">{i === 0 ? "Now" : clock(h.time, prefs.timeFormat).replace(":00", "")}</span>
+              <span className={`h-4 whitespace-nowrap text-[10px] font-medium ${i === 0 || h.time.slice(11, 13) === "00" ? "text-accent" : ""}`}>
+                {i === 0 || h.time.slice(11, 13) === "00" ? shortDate(h.time).split(" ").slice(0, 2).join(" ").replace(",", "") : ""}
+              </span>
+              <span className="text-[11px] text-fg-faint">{i === 0 ? "Now" : hourLabel(h.time, prefs.timeFormat)}</span>
               <WeatherIcon code={h.weatherCode} isDay={h.isDay} size={30} />
               <span className="text-sm font-medium">{temp(h.temperature, prefs.tempUnit)}</span>
               <span className="h-4 text-[11px] text-accent">{h.precipProb >= 10 ? `${h.precipProb}%` : ""}</span>
@@ -179,7 +192,7 @@ export function ForecastView({ loc, compact = false }: { loc: Loc; compact?: boo
         {tomorrow && (
           <section className="card p-5" aria-labelledby="tmr-h">
             <h2 id="tmr-h" className="text-sm font-semibold uppercase tracking-wider text-fg-muted">
-              Tomorrow · {dayName(tomorrow.date, false)}
+              Tomorrow · {shortDate(tomorrow.date)}
             </h2>
             <div className="mt-3 flex items-center gap-3">
               <WeatherIcon code={tomorrow.weatherCode} size={56} />
@@ -188,11 +201,12 @@ export function ForecastView({ loc, compact = false }: { loc: Loc; compact?: boo
                   {temp(tomorrow.tempMax, prefs.tempUnit)}
                   <span className="text-lg text-fg-faint"> / {temp(tomorrow.tempMin, prefs.tempUnit)}</span>
                 </div>
-                <div className="text-sm text-fg-muted">{describe(tomorrow.weatherCode).label}</div>
+                <div className="text-sm text-fg-muted">{tmrLabel}</div>
               </div>
             </div>
             <ul className="mt-4 space-y-2 text-sm">
               <Row k="Rain" v={`${tomorrow.precipProbMax}% · ${tomorrow.precipSum.toFixed(1)} mm`} />
+              {tmrRain && <Row k="Rain expected" v={tmrRain} />}
               <Row k="Wind" v={`${wind(tomorrow.windMax, prefs.windUnit)} ${compass(tomorrow.windDirection)}`} />
               <Row k="Gusts" v={wind(tomorrow.gustMax, prefs.windUnit)} />
               <Row k="UV max" v={`${Math.round(tomorrow.uvMax)} · ${uvLevel(tomorrow.uvMax)}`} />

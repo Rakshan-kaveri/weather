@@ -42,7 +42,7 @@ model User {
   // Display preferences
   tempUnit   String @default("C") // C | F
   windUnit   String @default("kmh") // kmh | ms | mph | kn
-  timeFormat String @default("24") // 12 | 24
+  timeFormat String @default("12") // 12 | 24
   theme      String @default("dark") // dark | light
 
   // Automatic severe-weather warnings for the user's places

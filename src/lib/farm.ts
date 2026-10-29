@@ -1,5 +1,6 @@
 import type { DayPoint, Forecast, HourPoint } from "./weather";
 import { hoursFor } from "./weather";
+import { h12 } from "./units";
 
 /**
  * Farm advisory computed from the forecast (no language here; see i18n.ts for wording).
@@ -38,7 +39,7 @@ function sprayWindows(hours: HourPoint[]) {
   for (let i = 0; i <= ok.length; i++) {
     if (ok[i] && start < 0) start = i;
     if (!ok[i] && start >= 0) {
-      if (i - start >= 2) windows.push(`${hours[start].time.slice(11, 16)}–${String(hourOf(hours[i - 1]) + 1).padStart(2, "0")}:00`);
+      if (i - start >= 2) windows.push(`${h12(hourOf(hours[start]))}–${h12((hourOf(hours[i - 1]) + 1) % 24)}`);
       start = -1;
     }
   }

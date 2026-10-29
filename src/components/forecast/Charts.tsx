@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import type { HistoryDay, HourPoint } from "@/lib/weather";
-import { clock, dateLabel } from "@/lib/units";
+import { clock, dateLabel, h12, shortDate } from "@/lib/units";
 
 const conv = (c: number, unit: "C" | "F") => Math.round((unit === "F" ? c * 1.8 + 32 : c) * 10) / 10;
 
@@ -31,7 +31,7 @@ const tooltipStyle = {
 
 export function HourlyChart({ hours, tempUnit, timeFormat }: { hours: HourPoint[]; tempUnit: "C" | "F"; timeFormat: "12" | "24" }) {
   const data = hours.map((h) => ({
-    t: clock(h.time, timeFormat),
+    t: `${shortDate(h.time).split(",")[0]} ${timeFormat === "12" ? h12(Number(h.time.slice(11, 13))) : clock(h.time, "24")}`,
     temp: conv(h.temperature, tempUnit),
     feels: conv(h.feelsLike, tempUnit),
     rain: h.precipProb,

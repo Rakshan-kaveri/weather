@@ -4,6 +4,7 @@ import { describe } from "./codes";
 import { REPORT_TEXT, STRINGS, aqiWord, compassWord, localDate, type Lang } from "./i18n";
 import { getAirQuality, getForecast, hoursFor, type AirQuality, type DayPoint, type Forecast } from "./weather";
 import { farmAdvice, type FarmItem } from "./farm";
+import { clock, rainWindow } from "./units";
 
 export type Report = {
   subject: string;
@@ -16,7 +17,7 @@ export type Report = {
 /** "Thu, 29 Oct, 10:30 pm" in the subscriber's language and timezone. */
 function issuedAt(timeZone: string, lang: Lang) {
   try {
-    return new Date().toLocaleString(REPORT_TEXT[lang].locale, { timeZone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    return new Date().toLocaleString(REPORT_TEXT[lang].locale, { timeZone, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
   } catch {
     return new Date().toISOString().slice(0, 16).replace("T", " ");
   }
@@ -60,6 +61,12 @@ export async function buildReport(sub: Subscription): Promise<Report> {
   };
 }
 
+/** " (1 PM – 4 PM)" when rain is expected at particular hours of the day. */
+function rainAt({ forecast, day }: Ctx) {
+  const w = rainWindow(hoursFor(forecast, day.date));
+  return w ? ` (${w})` : "";
+}
+
 function subjectLine({ day, sub, lang }: Ctx) {
   const t = REPORT_TEXT[lang];
   const when = sub.forecastDay === "tomorrow" ? t.tomorrow : t.today;
@@ -69,12 +76,13 @@ function subjectLine({ day, sub, lang }: Ctx) {
   );
 }
 
-export function smsText({ day, aqi, sub, lang, farm }: Ctx, withStop = true) {
+export function smsText(ctx: Ctx, withStop = true) {
+  const { day, aqi, sub, lang, farm } = ctx;
   const s = STRINGS[lang];
   const t = REPORT_TEXT[lang];
   const when = sub.forecastDay === "tomorrow" ? s.tomorrow : s.today;
-  const hhmm = new Date().toLocaleTimeString("en-GB", { timeZone: sub.timezone, hour: "2-digit", minute: "2-digit" });
-  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${localDate(day.date, lang, "short")} (${t.issued} ${hhmm}): ${condition(day.weatherCode, lang)}`];
+  const hhmm = new Date().toLocaleTimeString("en-US", { timeZone: sub.timezone, hour: "numeric", minute: "2-digit", hour12: true });
+  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${localDate(day.date, lang, "short")} (${t.issued} ${hhmm}): ${condition(day.weatherCode, lang)}${rainAt(ctx)}`];
   if (sub.includeTemp) parts.push(`${s.max} ${Math.round(day.tempMax)}°C ${s.min} ${Math.round(day.tempMin)}°C`);
   if (sub.includeRain) parts.push(`${s.rainChance} ${day.precipProbMax}% (${day.precipSum.toFixed(1)} ${t.mm})`);
   if (sub.includeWind) parts.push(`${s.wind} ${Math.round(day.windMax)} ${t.kmh} ${compassWord(day.windDirection, lang)}`);
@@ -210,7 +218,7 @@ function emailHtml(ctx: Ctx) {
 <tr><td style="padding:20px 22px 4px">
   <div style="font-size:12px;color:#7f8ba3;letter-spacing:.04em">${esc(sub.placeName)} · ${esc(when)}</div>
   <div style="font-size:34px;font-weight:300;margin:6px 0 2px;color:#ffffff">${Math.round(day.tempMax)}°<span style="font-size:18px;color:#7f8ba3"> / ${Math.round(day.tempMin)}°</span></div>
-  <div style="font-size:15px;color:#cfd7e6">${esc(condition(day.weatherCode, lang))}</div>
+  <div style="font-size:15px;color:#cfd7e6">${esc(condition(day.weatherCode, lang) + rainAt(ctx))}</div>
 </td></tr>
 ${stats.length ? `<tr><td style="padding:14px 14px 2px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d1422;border:1px solid #1f2a3d;border-radius:8px"><tr>${stats.join("")}</tr></table></td></tr>` : ""}
 ${detailed && periods.length ? row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${periods
@@ -220,7 +228,7 @@ ${detailed && periods.length ? row(`<table role="presentation" width="100%" cell
         `<td style="width:33%;padding:6px 4px;text-align:center;border:1px solid #1a2333;font-size:12px"><div style="color:#7f8ba3;font-size:11px">${esc(p.label)}</div><div style="color:#e8edf6;margin-top:2px">${Math.round(p.temp)}° · ${p.rain}%</div><div style="color:#9aa6bd;font-size:11px">${esc(p.cond)}</div></td>`,
     )
     .join("")}</tr></table>`) : ""}
-${detailed ? `<tr><td style="padding:10px 22px 0;font-size:12px;color:#7f8ba3">${esc(t.sunrise)} ${day.sunrise.slice(11, 16)} · ${esc(t.sunset)} ${day.sunset.slice(11, 16)} · ${esc(t.uvMax)} ${Math.round(day.uvMax)}${day.sunshineHours != null ? ` · ${esc(t.sunshine)} ${day.sunshineHours.toFixed(1)} ${esc(t.hours)}` : ""}</td></tr>` : ""}
+${detailed ? `<tr><td style="padding:10px 22px 0;font-size:12px;color:#7f8ba3">${esc(t.sunrise)} ${clock(day.sunrise, "12")} · ${esc(t.sunset)} ${clock(day.sunset, "12")} · ${esc(t.uvMax)} ${Math.round(day.uvMax)}${day.sunshineHours != null ? ` · ${esc(t.sunshine)} ${day.sunshineHours.toFixed(1)} ${esc(t.hours)}` : ""}</td></tr>` : ""}
 ${tips.length ? row(`<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8fb8ff;font-weight:700;margin:6px 0 8px">${esc(t.tipsHeading)}</div>${tips.map((x) => `<div style="background:#13233b;border-left:3px solid #4ea8ff;padding:8px 11px;border-radius:6px;margin-bottom:7px;font-size:13px;color:#dbe6f7">${esc(x)}</div>`).join("")}`) : ""}
 ${farmHtml}
 <tr><td style="padding:18px 22px 22px"><a href="${link}" style="display:inline-block;background:#4ea8ff;color:#06101f;text-decoration:none;font-weight:600;font-size:13px;padding:9px 16px;border-radius:7px">${esc(t.openForecast)}</a></td></tr>
