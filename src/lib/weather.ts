@@ -41,6 +41,9 @@ export type HourPoint = {
   uvIndex: number;
   cloudCover: number;
   isDay: boolean;
+  soilMoisture: number | null; // m³/m³ at 3–9 cm
+  soilTemp: number | null; // °C at 6 cm
+  et0: number | null; // reference evapotranspiration, mm/h
 };
 
 export type DayPoint = {
@@ -56,6 +59,8 @@ export type DayPoint = {
   sunrise: string;
   sunset: string;
   uvMax: number;
+  et0: number | null; // mm/day (FAO-56 reference evapotranspiration)
+  sunshineHours: number | null;
 };
 
 export type Forecast = {
@@ -151,6 +156,9 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
         "cloud_cover",
         "dew_point_2m",
         "is_day",
+        "soil_moisture_3_to_9cm",
+        "soil_temperature_6cm",
+        "et0_fao_evapotranspiration",
       ].join(","),
       daily: [
         "weather_code",
@@ -164,6 +172,8 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
         "sunrise",
         "sunset",
         "uv_index_max",
+        "et0_fao_evapotranspiration",
+        "sunshine_duration",
       ].join(","),
     });
     const j: any = await getJson(`${FORECAST}?${params}`);
@@ -182,6 +192,9 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
       uvIndex: h.uv_index[i] ?? 0,
       cloudCover: h.cloud_cover[i] ?? 0,
       isDay: h.is_day[i] === 1,
+      soilMoisture: h.soil_moisture_3_to_9cm?.[i] ?? null,
+      soilTemp: h.soil_temperature_6cm?.[i] ?? null,
+      et0: h.et0_fao_evapotranspiration?.[i] ?? null,
     }));
     // Pick the hourly values for "now" (visibility / UV / dew point are hourly-only)
     const nowHour = (j.current.time as string).slice(0, 13);
@@ -200,6 +213,8 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
       sunrise: d.sunrise[i],
       sunset: d.sunset[i],
       uvMax: d.uv_index_max[i] ?? 0,
+      et0: d.et0_fao_evapotranspiration?.[i] ?? null,
+      sunshineHours: d.sunshine_duration?.[i] != null ? d.sunshine_duration[i] / 3600 : null,
     }));
     const c = j.current;
     return {

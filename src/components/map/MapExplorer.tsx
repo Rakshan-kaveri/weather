@@ -466,7 +466,7 @@ export default function MapExplorer() {
     ctx.drawImage(off, 0, 0, w * step, h * step);
 
     if (def.labels) {
-      ctx.font = "600 11px \"Inter Variable\", Inter, system-ui, -apple-system, Segoe UI, sans-serif";
+      ctx.font = "600 10px \"Inter Variable\", Inter, system-ui, -apple-system, Segoe UI, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       const [gw, , , gn] = grid.bbox;
@@ -485,8 +485,8 @@ export default function MapExplorer() {
           const text =
             layer === "temp" ? fmtTemp(v, prefs.tempUnit) : layer === "wind" ? fmtWind(v, prefs.windUnit).split(" ")[0] : String(Math.round(v));
           ctx.fillStyle = "rgba(0,0,0,0.45)";
-          const tw = ctx.measureText(text).width + 10;
-          roundRect(ctx, p.x - tw / 2, p.y - 9, tw, 18, 9);
+          const tw = ctx.measureText(text).width + 8;
+          roundRect(ctx, p.x - tw / 2, p.y - 8, tw, 16, 8);
           ctx.fill();
           ctx.fillStyle = "#fff";
           ctx.fillText(text, p.x, p.y + 0.5);
@@ -675,7 +675,7 @@ export default function MapExplorer() {
       {/* Layer switcher */}
       <nav
         aria-label="Map layers"
-        className="glass absolute bottom-[132px] left-3 right-3 z-[1000] flex gap-1 overflow-x-auto rounded-2xl p-1.5 scrollbar-thin sm:bottom-auto sm:left-auto sm:right-3 sm:top-[76px] sm:w-[150px] sm:flex-col"
+        className="glass absolute bottom-[132px] left-3 right-3 z-[1000] flex gap-1 overflow-x-auto rounded-2xl p-1.5 scrollbar-thin sm:bottom-auto sm:left-auto sm:right-3 sm:top-[76px] sm:w-[132px] sm:flex-col"
       >
         {LAYERS.map((l) => (
           <button
@@ -685,11 +685,11 @@ export default function MapExplorer() {
               setPlaying(false);
             }}
             aria-pressed={layer === l.id}
-            className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition ${
+            className={`flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition ${
               layer === l.id ? "bg-white text-black" : "text-white/80 hover:bg-white/10 hover:text-white"
             }`}
           >
-            <Icon name={l.icon} size={17} />
+            <Icon name={l.icon} size={15} />
             <span>{l.label}</span>
           </button>
         ))}

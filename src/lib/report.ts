@@ -1,9 +1,9 @@
 import type { Subscription } from "@prisma/client";
 import { APP_NAME, config } from "./config";
-import { aqiLevel, compass, describe, type IconKind } from "./codes";
-import { STRINGS, type Lang } from "./i18n";
+import { describe } from "./codes";
+import { REPORT_TEXT, STRINGS, aqiWord, compassWord, localDate, type Lang } from "./i18n";
 import { getAirQuality, getForecast, hoursFor, type AirQuality, type DayPoint, type Forecast } from "./weather";
-import { dateLabel, dayName } from "./units";
+import { farmAdvice, type FarmItem } from "./farm";
 
 export type Report = {
   subject: string;
@@ -13,15 +13,12 @@ export type Report = {
   forDate: string;
 };
 
-type Ctx = { day: DayPoint; forecast: Forecast; aqi: AirQuality | null; sub: Subscription; lang: Lang };
+type Ctx = { day: DayPoint; forecast: Forecast; aqi: AirQuality | null; sub: Subscription; lang: Lang; farm: FarmItem[] };
 
-function conditionWord(icon: IconKind, lang: Lang) {
-  const s = STRINGS[lang];
-  if (icon === "storm") return s.stormy;
-  if (icon === "rain" || icon === "heavy-rain" || icon === "drizzle") return s.rainy;
-  if (icon === "fog") return s.foggy;
-  if (icon === "cloudy") return s.cloudy;
-  return s.sunny;
+/** Weather condition in the report language (English keeps the more precise WMO wording). */
+function condition(code: number, lang: Lang) {
+  const d = describe(code);
+  return lang === "en" ? d.label : REPORT_TEXT[lang].conditions[d.icon];
 }
 
 export function generalTips({ day, lang }: Pick<Ctx, "day" | "lang">) {
@@ -35,32 +32,13 @@ export function generalTips({ day, lang }: Pick<Ctx, "day" | "lang">) {
   return tips;
 }
 
-/** Simple agronomy rules of thumb for farmers. */
-export function farmerTips({ day, forecast, lang }: Pick<Ctx, "day" | "forecast" | "lang">) {
-  const s = STRINGS[lang];
-  const hours = hoursFor(forecast, day.date).filter((h) => {
-    const hr = Number(h.time.slice(11, 13));
-    return hr >= 6 && hr <= 18;
-  });
-  const maxWindDay = Math.max(...hours.map((h) => h.windSpeed), 0);
-  const maxRainProbDay = Math.max(...hours.map((h) => h.precipProb), 0);
-  const tips: string[] = [];
-  if (day.precipSum >= 20) tips.push(s.farmHeavyRain);
-  if (maxWindDay < 15 && maxRainProbDay < 30) tips.push(s.farmSpray);
-  else tips.push(s.farmNoSpray);
-  if (day.precipSum >= 5 || day.precipProbMax >= 60) tips.push(s.farmSkipIrrigation);
-  else if (day.tempMax >= 32) tips.push(s.farmIrrigate);
-  if (day.tempMax >= 38) tips.push(s.farmHeatLivestock);
-  return tips;
-}
-
 export async function buildReport(sub: Subscription): Promise<Report> {
   const forecast = await getForecast(sub.lat, sub.lon);
   const aqi = sub.includeAqi ? await getAirQuality(sub.lat, sub.lon).catch(() => null) : null;
   const day = forecast.daily[sub.forecastDay === "tomorrow" ? 1 : 0];
   if (!day) throw new Error("Forecast unavailable for this day");
   const lang = (["en", "kn", "hi"].includes(sub.language) ? sub.language : "en") as Lang;
-  const ctx: Ctx = { day, forecast, aqi, sub, lang };
+  const ctx: Ctx = { day, forecast, aqi, sub, lang, farm: sub.farmerTips ? farmAdvice(forecast, day) : [] };
   return {
     subject: subjectLine(ctx),
     html: emailHtml(ctx),
@@ -70,104 +48,147 @@ export async function buildReport(sub: Subscription): Promise<Report> {
   };
 }
 
-function subjectLine({ day, sub }: Ctx) {
-  const d = describe(day.weatherCode);
-  const when = sub.forecastDay === "tomorrow" ? "Tomorrow" : "Today";
-  return `${when} in ${sub.placeName}: ${d.label}, ${Math.round(day.tempMax)}° / ${Math.round(day.tempMin)}°` +
-    (day.precipProbMax >= 40 ? ` · ${day.precipProbMax}% rain` : "");
+function subjectLine({ day, sub, lang }: Ctx) {
+  const t = REPORT_TEXT[lang];
+  const when = sub.forecastDay === "tomorrow" ? t.tomorrow : t.today;
+  return (
+    `${sub.placeName} · ${when}: ${condition(day.weatherCode, lang)}, ${Math.round(day.tempMax)}° / ${Math.round(day.tempMin)}°` +
+    (day.precipProbMax >= 40 ? ` · ${t.rainChanceShort} ${day.precipProbMax}%` : "")
+  );
 }
 
-export function smsText({ day, forecast, aqi, sub, lang }: Ctx, withStop = true) {
+export function smsText({ day, aqi, sub, lang, farm }: Ctx, withStop = true) {
   const s = STRINGS[lang];
+  const t = REPORT_TEXT[lang];
   const when = sub.forecastDay === "tomorrow" ? s.tomorrow : s.today;
-  const d = describe(day.weatherCode);
-  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${dateLabel(day.date)}: ${conditionWord(d.icon, lang)}`];
+  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${localDate(day.date, lang, "short")}: ${condition(day.weatherCode, lang)}`];
   if (sub.includeTemp) parts.push(`${s.max} ${Math.round(day.tempMax)}°C ${s.min} ${Math.round(day.tempMin)}°C`);
-  if (sub.includeRain) parts.push(`${s.rainChance} ${day.precipProbMax}% (${day.precipSum.toFixed(1)}mm)`);
-  if (sub.includeWind) parts.push(`${s.wind} ${Math.round(day.windMax)} km/h ${compass(day.windDirection)}`);
-  if (sub.includeAqi && aqi?.usAqi != null && sub.forecastDay === "today") parts.push(`AQI ${Math.round(aqi.usAqi)}`);
+  if (sub.includeRain) parts.push(`${s.rainChance} ${day.precipProbMax}% (${day.precipSum.toFixed(1)} ${t.mm})`);
+  if (sub.includeWind) parts.push(`${s.wind} ${Math.round(day.windMax)} ${t.kmh} ${compassWord(day.windDirection, lang)}`);
+  if (sub.includeAqi && aqi?.usAqi != null && sub.forecastDay === "today") parts.push(`AQI ${Math.round(aqi.usAqi)} ${aqiWord(aqi.usAqi, lang)}`);
   let msg = parts.join(". ") + ".";
-  if (sub.farmerTips) msg += " " + farmerTips({ day, forecast, lang }).join(" ");
-  else if (sub.includeTips) msg += " " + generalTips({ day, lang })[0];
-  if (sub.format === "short" && msg.length > 300) msg = msg.slice(0, 297) + "...";
+  if (farm.length) {
+    const lines = farm.map((i) => t.farmSms(i)).filter((x): x is string => !!x);
+    if (lines.length) msg += " " + lines.join(". ") + ".";
+  } else if (sub.includeTips) msg += " " + generalTips({ day, lang })[0];
+  if (sub.format === "short" && msg.length > 320) msg = msg.slice(0, 317) + "...";
   return withStop ? `${msg} ${s.stop}` : msg;
 }
 
 function emailText(ctx: Ctx) {
-  const { sub } = ctx;
-  return `${smsText(ctx, false)}\n\nFull forecast: ${config.appUrl}/w?lat=${sub.lat}&lon=${sub.lon}&name=${encodeURIComponent(sub.placeName)}\nUnsubscribe: ${config.appUrl}/unsubscribe/${sub.unsubscribeToken}`;
+  const { sub, lang, day } = ctx;
+  const t = REPORT_TEXT[lang];
+  const dn = (d: string) => localDate(d, lang, "short");
+  const farmLines = ctx.farm.map((i) => `- ${t.farmTitles[i.key]}: ${t.farm(i, dn)}`).join("\n");
+  return [
+    subjectLine(ctx),
+    localDate(day.date, lang),
+    "",
+    smsText(ctx, false),
+    farmLines ? `\n${t.farmHeading}\n${farmLines}` : "",
+    "",
+    `${t.fullForecast}: ${config.appUrl}/w?lat=${sub.lat}&lon=${sub.lon}&name=${encodeURIComponent(sub.placeName)}`,
+    `${t.unsubscribe}: ${config.appUrl}/unsubscribe/${sub.unsubscribeToken}`,
+  ].join("\n");
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-function emailHtml({ day, forecast, aqi, sub, lang }: Ctx) {
-  const d = describe(day.weatherCode);
-  const s = STRINGS[lang];
-  const when = sub.forecastDay === "tomorrow" ? s.tomorrow : s.today;
+const FARM_ICON: Record<FarmItem["key"], string> = {
+  spray: "#7fd36b", irrigation: "#4ea8ff", soil: "#c9a26b", disease: "#ff9a3c", livestock: "#f5c542",
+  harvest: "#e8dd4a", fertilizer: "#41c7b9", sowing: "#7fd36b", heavyRain: "#ff5a5a", wind: "#ff9a3c", outlook: "#8fb8ff",
+};
+
+function farmTone(i: FarmItem): string {
+  if (i.key === "heavyRain") return "#ff5a5a";
+  if (i.key === "disease" && i.risk === "high") return "#ff9a3c";
+  if (i.key === "livestock" && i.level === "severe") return "#ff5a5a";
+  if (i.key === "spray" && !i.ok) return "#ff9a3c";
+  if (i.key === "fertilizer" && i.advice === "avoid") return "#ff9a3c";
+  return FARM_ICON[i.key];
+}
+
+function emailHtml(ctx: Ctx) {
+  const { day, forecast, aqi, sub, lang, farm } = ctx;
+  const t = REPORT_TEXT[lang];
+  const when = sub.forecastDay === "tomorrow" ? t.tomorrow : t.today;
   const link = `${config.appUrl}/w?lat=${sub.lat}&lon=${sub.lon}&name=${encodeURIComponent(sub.placeName)}`;
   const unsub = `${config.appUrl}/unsubscribe/${sub.unsubscribeToken}`;
   const manage = `${config.appUrl}/subscriptions`;
+  const dn = (d: string) => localDate(d, lang, "short");
 
   const periods = [
-    { label: "Morning", from: 6, to: 11 },
-    { label: "Afternoon", from: 12, to: 16 },
-    { label: "Evening", from: 17, to: 20 },
-    { label: "Night", from: 21, to: 23 },
-  ].map((p) => {
-    const hs = hoursFor(forecast, day.date).filter((h) => {
-      const hr = Number(h.time.slice(11, 13));
-      return hr >= p.from && hr <= p.to;
-    });
-    if (!hs.length) return null;
-    const t = hs.reduce((a, h) => a + h.temperature, 0) / hs.length;
-    const rain = Math.max(...hs.map((h) => h.precipProb));
-    const mid = hs[Math.floor(hs.length / 2)];
-    return { ...p, t, rain, label2: describe(mid.weatherCode).label };
-  }).filter(Boolean) as { label: string; t: number; rain: number; label2: string }[];
+    { label: t.periods[0], from: 6, to: 11 },
+    { label: t.periods[1], from: 12, to: 16 },
+    { label: t.periods[2], from: 17, to: 20 },
+    { label: t.periods[3], from: 21, to: 23 },
+  ]
+    .map((p) => {
+      const hs = hoursFor(forecast, day.date).filter((h) => {
+        const hr = Number(h.time.slice(11, 13));
+        return hr >= p.from && hr <= p.to;
+      });
+      if (!hs.length) return null;
+      const temp = hs.reduce((a, h) => a + h.temperature, 0) / hs.length;
+      const rain = Math.max(...hs.map((h) => h.precipProb));
+      const mid = hs[Math.floor(hs.length / 2)];
+      return { label: p.label, temp, rain, cond: condition(mid.weatherCode, lang) };
+    })
+    .filter(Boolean) as { label: string; temp: number; rain: number; cond: string }[];
 
   const stat = (label: string, value: string) =>
-    `<td style="padding:12px 8px;text-align:center;border-right:1px solid #1f2a3d"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7f8ba3">${esc(label)}</div><div style="font-size:17px;font-weight:600;color:#e8edf6;margin-top:4px">${esc(value)}</div></td>`;
+    `<td style="padding:10px 6px;text-align:center;border-right:1px solid #1f2a3d"><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#7f8ba3">${esc(label)}</div><div style="font-size:14px;font-weight:600;color:#e8edf6;margin-top:3px">${esc(value)}</div></td>`;
 
   const stats: string[] = [];
-  if (sub.includeTemp) stats.push(stat("High / Low", `${Math.round(day.tempMax)}° / ${Math.round(day.tempMin)}°`));
-  if (sub.includeRain) stats.push(stat("Rain", `${day.precipProbMax}% · ${day.precipSum.toFixed(1)} mm`));
-  if (sub.includeWind) stats.push(stat("Wind", `${Math.round(day.windMax)} km/h ${compass(day.windDirection)}`));
-  if (sub.includeAqi && aqi?.usAqi != null && sub.forecastDay === "today") stats.push(stat("Air quality", `${Math.round(aqi.usAqi)} · ${aqiLevel(aqi.usAqi).label}`));
+  if (sub.includeTemp) stats.push(stat(t.highLow, `${Math.round(day.tempMax)}° / ${Math.round(day.tempMin)}°`));
+  if (sub.includeRain) stats.push(stat(t.rain, `${day.precipProbMax}% · ${day.precipSum.toFixed(1)} ${t.mm}`));
+  if (sub.includeWind) stats.push(stat(t.wind, `${Math.round(day.windMax)} ${t.kmh} ${compassWord(day.windDirection, lang)}`));
+  if (sub.includeAqi && aqi?.usAqi != null && sub.forecastDay === "today") stats.push(stat(t.airQuality, `${Math.round(aqi.usAqi)} · ${aqiWord(aqi.usAqi, lang)}`));
 
-  const tips = [
-    ...(sub.includeTips ? generalTips({ day, lang }) : []),
-    ...(sub.farmerTips ? farmerTips({ day, forecast, lang }) : []),
-  ];
-
+  const tips = sub.includeTips ? generalTips({ day, lang }) : [];
   const detailed = sub.format === "detailed";
+  const row = (cells: string) => `<tr><td style="padding:14px 22px 0">${cells}</td></tr>`;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subjectLine({ day, forecast, aqi, sub, lang }))}</title></head>
-<body style="margin:0;background:#0a0f1a;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e8edf6">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0a0f1a;padding:24px 12px"><tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#111827;border:1px solid #1f2a3d;border-radius:14px;overflow:hidden">
-<tr><td style="padding:18px 24px;border-bottom:1px solid #1f2a3d">
-  <span style="font-weight:700;font-size:16px;letter-spacing:.02em;color:#e8edf6">${APP_NAME}</span>
-  <span style="float:right;font-size:12px;color:#7f8ba3">${esc(dayName(day.date, false))}, ${esc(dateLabel(day.date))}</span>
+  const farmHtml = farm.length
+    ? row(
+        `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7fd36b;font-weight:700;margin:6px 0 8px">${esc(t.farmHeading)}</div>` +
+          farm
+            .map(
+              (i) =>
+                `<div style="background:#0d1422;border:1px solid #1f2a3d;border-left:3px solid ${farmTone(i)};border-radius:8px;padding:9px 11px;margin-bottom:7px"><div style="font-size:11px;font-weight:700;color:${farmTone(i)};margin-bottom:2px">${esc(t.farmTitles[i.key])}</div><div style="font-size:13px;line-height:1.5;color:#dbe6f7">${esc(t.farm(i, dn))}</div></div>`,
+            )
+            .join(""),
+      )
+    : "";
+
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subjectLine(ctx))}</title></head>
+<body style="margin:0;background:#0a0f1a;font-family:-apple-system,Segoe UI,Roboto,'Noto Sans Kannada','Noto Sans Devanagari',Helvetica,Arial,sans-serif;color:#e8edf6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0a0f1a;padding:20px 10px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;background:#111827;border:1px solid #1f2a3d;border-radius:12px;overflow:hidden">
+<tr><td style="padding:14px 22px;border-bottom:1px solid #1f2a3d">
+  <span style="font-weight:700;font-size:14px;color:#e8edf6">${APP_NAME}</span>
+  <span style="float:right;font-size:12px;color:#7f8ba3">${esc(localDate(day.date, lang))}</span>
 </td></tr>
-<tr><td style="padding:28px 24px 8px">
-  <div style="font-size:13px;color:#7f8ba3;text-transform:uppercase;letter-spacing:.08em">${esc(when)} · ${esc(sub.placeName)}</div>
-  <div style="font-size:44px;font-weight:300;margin:8px 0 2px;color:#ffffff">${Math.round(day.tempMax)}°<span style="font-size:22px;color:#7f8ba3"> / ${Math.round(day.tempMin)}°</span></div>
-  <div style="font-size:18px;color:#cfd7e6">${esc(d.label)}</div>
+<tr><td style="padding:20px 22px 4px">
+  <div style="font-size:12px;color:#7f8ba3;letter-spacing:.04em">${esc(sub.placeName)} · ${esc(when)}</div>
+  <div style="font-size:34px;font-weight:300;margin:6px 0 2px;color:#ffffff">${Math.round(day.tempMax)}°<span style="font-size:18px;color:#7f8ba3"> / ${Math.round(day.tempMin)}°</span></div>
+  <div style="font-size:15px;color:#cfd7e6">${esc(condition(day.weatherCode, lang))}</div>
 </td></tr>
-${stats.length ? `<tr><td style="padding:16px 16px 4px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d1422;border:1px solid #1f2a3d;border-radius:10px"><tr>${stats.join("")}</tr></table></td></tr>` : ""}
-${detailed && periods.length ? `<tr><td style="padding:16px 24px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${periods
+${stats.length ? `<tr><td style="padding:14px 14px 2px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d1422;border:1px solid #1f2a3d;border-radius:8px"><tr>${stats.join("")}</tr></table></td></tr>` : ""}
+${detailed && periods.length ? row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${periods
     .map(
       (p) =>
-        `<tr><td style="padding:8px 0;border-bottom:1px solid #1a2333;color:#7f8ba3;font-size:13px;width:30%">${p.label}</td><td style="padding:8px 0;border-bottom:1px solid #1a2333;font-size:14px">${esc(p.label2)}</td><td style="padding:8px 0;border-bottom:1px solid #1a2333;text-align:right;font-size:14px">${Math.round(p.t)}° · ${p.rain}%</td></tr>`,
+        `<tr><td style="padding:7px 0;border-bottom:1px solid #1a2333;color:#7f8ba3;font-size:12px;width:28%">${esc(p.label)}</td><td style="padding:7px 0;border-bottom:1px solid #1a2333;font-size:13px">${esc(p.cond)}</td><td style="padding:7px 0;border-bottom:1px solid #1a2333;text-align:right;font-size:13px">${Math.round(p.temp)}° · ${p.rain}%</td></tr>`,
     )
-    .join("")}</table></td></tr>` : ""}
-${detailed ? `<tr><td style="padding:12px 24px 0;font-size:13px;color:#7f8ba3">Sunrise ${day.sunrise.slice(11, 16)} · Sunset ${day.sunset.slice(11, 16)} · UV max ${Math.round(day.uvMax)}</td></tr>` : ""}
-${tips.length ? `<tr><td style="padding:18px 24px 0">${tips.map((t) => `<div style="background:#13233b;border-left:3px solid #4ea8ff;padding:10px 12px;border-radius:6px;margin-bottom:8px;font-size:14px;color:#dbe6f7">${esc(t)}</div>`).join("")}</td></tr>` : ""}
-<tr><td style="padding:22px 24px 26px"><a href="${link}" style="display:inline-block;background:#4ea8ff;color:#06101f;text-decoration:none;font-weight:600;font-size:14px;padding:10px 18px;border-radius:8px">Open full forecast</a></td></tr>
-<tr><td style="padding:16px 24px;border-top:1px solid #1f2a3d;font-size:12px;color:#66728a;line-height:1.6">
-  You're receiving this because you subscribed to daily weather for ${esc(sub.placeName)} at ${esc(sub.sendTime)} (${esc(sub.timezone)}).<br>
-  <a href="${manage}" style="color:#8fb8ff">Manage reports</a> · <a href="${unsub}" style="color:#8fb8ff">Unsubscribe</a><br>
-  Weather data: Open-Meteo.com
+    .join("")}</table>`) : ""}
+${detailed ? `<tr><td style="padding:10px 22px 0;font-size:12px;color:#7f8ba3">${esc(t.sunrise)} ${day.sunrise.slice(11, 16)} · ${esc(t.sunset)} ${day.sunset.slice(11, 16)} · ${esc(t.uvMax)} ${Math.round(day.uvMax)}${day.sunshineHours != null ? ` · ${esc(t.sunshine)} ${day.sunshineHours.toFixed(1)} ${esc(t.hours)}` : ""}</td></tr>` : ""}
+${tips.length ? row(`<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8fb8ff;font-weight:700;margin:6px 0 8px">${esc(t.tipsHeading)}</div>${tips.map((x) => `<div style="background:#13233b;border-left:3px solid #4ea8ff;padding:8px 11px;border-radius:6px;margin-bottom:7px;font-size:13px;color:#dbe6f7">${esc(x)}</div>`).join("")}`) : ""}
+${farmHtml}
+<tr><td style="padding:18px 22px 22px"><a href="${link}" style="display:inline-block;background:#4ea8ff;color:#06101f;text-decoration:none;font-weight:600;font-size:13px;padding:9px 16px;border-radius:7px">${esc(t.openForecast)}</a></td></tr>
+<tr><td style="padding:14px 22px;border-top:1px solid #1f2a3d;font-size:11px;color:#66728a;line-height:1.6">
+  ${esc(t.footer(sub.placeName, sub.sendTime, sub.timezone))}<br>
+  <a href="${manage}" style="color:#8fb8ff">${esc(t.manage)}</a> · <a href="${unsub}" style="color:#8fb8ff">${esc(t.unsubscribe)}</a><br>
+  ${esc(t.dataCredit)}
 </td></tr>
 </table></td></tr></table></body></html>`;
 }
