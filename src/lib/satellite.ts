@@ -22,13 +22,13 @@ export type SatSource = {
 };
 
 const EUMETVIEW = "https://view.eumetsat.int/geoserver/wms";
-const MAX_FRAMES = 12;
+const MAX_FRAMES = 8;
 
 type CapLayer = { name: string; title: string; times: string };
 
 async function eumetviewLayers(): Promise<CapLayer[]> {
   return cached("eumetview:caps", 1800, async () => {
-    const res = await fetch(`${EUMETVIEW}?service=WMS&version=1.3.0&request=GetCapabilities`, { signal: AbortSignal.timeout(20000) });
+    const res = await fetch(`${EUMETVIEW}?service=WMS&version=1.3.0&request=GetCapabilities`, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error(`EUMETView ${res.status}`);
     const xml = await res.text();
     const out: CapLayer[] = [];
@@ -74,7 +74,7 @@ export function latestFrames(dim: string, n = MAX_FRAMES): string[] {
     .map((t) => new Date(t).toISOString().replace(".000Z", "Z"));
 }
 
-function himawariFrames(n = 18) {
+function himawariFrames(n = 9) {
   const t = new Date(Date.now() - 50 * 60_000);
   t.setUTCMinutes(Math.floor(t.getUTCMinutes() / 10) * 10, 0, 0);
   return Array.from({ length: n }, (_, i) => new Date(t.getTime() - (n - 1 - i) * 10 * 60_000).toISOString().slice(0, 19) + "Z");
@@ -123,7 +123,7 @@ export async function satelliteSources(): Promise<SatSource[]> {
 
   const global = layers.find((l) => l.name === "mumi:worldcloudmap_ir108") ?? layers.find((l) => /worldcloudmap/i.test(l.name));
   if (global) {
-    const frames = latestFrames(global.times, 8);
+    const frames = latestFrames(global.times, 6);
     sources.push({
       id: "global",
       label: "Global clouds",

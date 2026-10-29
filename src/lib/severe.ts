@@ -123,11 +123,11 @@ export async function activeCyclones(): Promise<Cyclone[]> {
     const from = new Date(Date.now() - 14 * 86400_000);
     const fmt = (d: Date) => d.toISOString().slice(0, 10);
     const all: Cyclone[] = [];
-    for (const level of ["Green", "Orange", "Red"] as const) {
+    await Promise.all((["Green", "Orange", "Red"] as const).map(async (level) => {
       try {
         const url = `https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=TC&alertlevel=${level}&fromDate=${fmt(from)}&toDate=${fmt(to)}&pageSize=100`;
-        const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) });
-        if (!res.ok) continue;
+        const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
+        if (!res.ok) return;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const j: any = await res.json().catch(() => null);
         for (const f of j?.features ?? []) {
@@ -150,9 +150,9 @@ export async function activeCyclones(): Promise<Cyclone[]> {
           });
         }
       } catch {
-        /* feed unavailable — try next level */
+        /* feed unavailable for this level */
       }
-    }
+    }));
     // de-duplicate by event id, keep the highest alert level
     const rank = { Green: 1, Orange: 2, Red: 3 };
     const byId = new Map<string, Cyclone>();

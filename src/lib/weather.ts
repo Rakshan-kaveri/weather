@@ -333,16 +333,16 @@ const GRID_VARS: Record<GridVar, string> = {
 };
 
 export async function getGrid(west: number, south: number, east: number, north: number): Promise<GridData> {
-  // Snap to a step that keeps the grid at ~12 x 10 points whatever the zoom level.
+  // Snap to a step that keeps the grid at ~10 x 8 points whatever the zoom level.
   const span = Math.max(east - west, north - south);
-  const steps = [0.25, 0.5, 1, 2, 3, 5, 8, 12];
-  const step = steps.find((s) => span / s <= 12) ?? 15;
+  const steps = [0.25, 0.5, 1, 2, 3, 4, 5, 8, 12];
+  const step = steps.find((s) => span / s <= 9) ?? 15;
   const w = Math.max(-180, Math.floor(west / step) * step - step);
   const e = Math.min(180, Math.ceil(east / step) * step + step);
   const s = Math.max(-85, Math.floor(south / step) * step - step);
   const n = Math.min(85, Math.ceil(north / step) * step + step);
-  const cols = Math.min(18, Math.round((e - w) / step) + 1);
-  const rows = Math.min(16, Math.round((n - s) / step) + 1);
+  const cols = Math.min(14, Math.round((e - w) / step) + 1);
+  const rows = Math.min(12, Math.round((n - s) / step) + 1);
   const dx = (e - w) / (cols - 1);
   const dy = (n - s) / (rows - 1);
 
@@ -356,8 +356,8 @@ export async function getGrid(west: number, south: number, east: number, north: 
       }
     }
     // Open-Meteo accepts many coordinates per request; split into chunks to keep URLs short.
-    const chunkSize = 100;
-    const results: any[] = [];
+    const chunkSize = 60;
+    const chunks: Promise<any[]>[] = [];
     for (let i = 0; i < lats.length; i += chunkSize) {
       const params = new URLSearchParams({
         latitude: lats.slice(i, i + chunkSize).join(","),
@@ -367,9 +367,9 @@ export async function getGrid(west: number, south: number, east: number, north: 
         forecast_hours: "48",
         timezone: "GMT",
       });
-      const j: any = await getJson(`${FORECAST}?${params}`);
-      results.push(...(Array.isArray(j) ? j : [j]));
+      chunks.push(getJson<any>(`${FORECAST}?${params}`).then((j) => (Array.isArray(j) ? j : [j])));
     }
+    const results: any[] = (await Promise.all(chunks)).flat();
     const times: string[] = results[0].hourly.time.map((t: string) => t + ":00Z");
     const values = {} as Record<GridVar, number[][]>;
     (Object.keys(GRID_VARS) as GridVar[]).forEach((k) => {

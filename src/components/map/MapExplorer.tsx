@@ -27,9 +27,9 @@ export default function MapExplorer() {
   const mapRef = useRef<L.Map | null>(null);
   const heatRef = useRef<HTMLCanvasElement | null>(null);
   const flowRef = useRef<HTMLCanvasElement | null>(null);
-  const satLayers = useRef<L.TileLayer[]>([]);
+  const satStack = useRef<FrameStack | null>(null);
   const cycloneLayer = useRef<L.LayerGroup | null>(null);
-  const radarLayers = useRef<L.TileLayer[]>([]);
+  const radarStack = useRef<FrameStack | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const rafRef = useRef<number>(0);
   const gridKey = useRef("");
@@ -166,35 +166,47 @@ export default function MapExplorer() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    satLayers.current.forEach((l) => l.remove());
-    satLayers.current = [];
+    satStack.current?.clear();
+    satStack.current = null;
     if (layer !== "satellite" || !sat) return;
-    // One tile layer per frame, all loaded up front, so playback is smooth (clouds visibly move).
-    satLayers.current = sat.frames.map((time) =>
-      sat.kind === "wms"
-        ? L.tileLayer
-            .wms(sat.url, {
+    satStack.current = new FrameStack(
+      map,
+      (i) => {
+        const time = sat.frames[i];
+        return sat.kind === "wms"
+          ? L.tileLayer.wms(sat.url, {
               pane: "sat",
               layers: sat.layer!,
               format: "image/png",
               transparent: true,
               version: "1.3.0",
-              opacity: 0,
               maxNativeZoom: sat.maxNativeZoom,
               maxZoom: 15,
+              updateWhenZooming: false,
               attribution: sat.attribution,
               ...(time ? { time } : {}),
             } as L.WMSOptions)
-            .addTo(map)
-        : L.tileLayer(sat.url, { pane: "sat", opacity: 0, maxNativeZoom: sat.maxNativeZoom, maxZoom: 15, attribution: sat.attribution, time } as L.TileLayerOptions).addTo(map),
+          : L.tileLayer(sat.url, {
+              pane: "sat",
+              maxNativeZoom: sat.maxNativeZoom,
+              maxZoom: 15,
+              updateWhenZooming: false,
+              attribution: sat.attribution,
+              time,
+            } as L.TileLayerOptions);
+      },
+      sat.opacity,
     );
-    setSatIdx(sat.frames.length - 1);
-    if (sat.frames.length > 1) setPlaying(true);
+    const last = sat.frames.length - 1;
+    setSatIdx(last);
+    satStack.current.show(last, sat.frames.length);
+    // Start the loop once the latest frame has had a moment to load.
+    const t = sat.frames.length > 1 ? setTimeout(() => setPlaying(true), 2500) : undefined;
+    return () => clearTimeout(t);
   }, [layer, sat]);
 
   useEffect(() => {
-    if (!sat) return;
-    satLayers.current.forEach((l, i) => l.setOpacity(i === satIdx ? sat.opacity : 0));
+    if (sat) satStack.current?.show(satIdx, sat.frames.length);
   }, [satIdx, sat]);
 
   /* ─── Active cyclones (GDACS) — shown on every layer ─── */
@@ -266,7 +278,7 @@ export default function MapExplorer() {
 
   useEffect(() => {
     if (!def.gridVar) return;
-    const t = setTimeout(loadGrid, 350);
+    const t = setTimeout(loadGrid, 600);
     return () => clearTimeout(t);
   }, [viewTick, def.gridVar, loadGrid]);
 
@@ -290,7 +302,7 @@ export default function MapExplorer() {
     const values = grid.values[def.gridVar][Math.min(timeIdx, grid.times.length - 1)];
     if (!values) return;
 
-    const step = 4;
+    const step = 6;
     const w = Math.ceil(size.x / step);
     const h = Math.ceil(size.y / step);
     const off = document.createElement("canvas");
@@ -358,7 +370,7 @@ export default function MapExplorer() {
     cancelAnimationFrame(rafRef.current);
     if (!map || !canvas) return;
     const size = map.getSize();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = 1; // thin wind lines look the same at 1x and cost 4x less on high-DPI screens
     canvas.width = size.x * dpr;
     canvas.height = size.y * dpr;
     canvas.style.width = `${size.x}px`;
@@ -372,7 +384,12 @@ export default function MapExplorer() {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const { u, v } = windComponents(grid, Math.min(timeIdx, grid.times.length - 1));
-    const count = Math.round(Math.min(3000, (size.x * size.y) / 500));
+    const count = Math.round(Math.min(1800, (size.x * size.y) / 800));
+    // Web Mercator: longitude depends only on x, latitude only on y, so precompute both once.
+    const lonAt = new Float64Array(size.x + 1);
+    const latAt = new Float64Array(size.y + 1);
+    for (let x = 0; x <= size.x; x++) lonAt[x] = wrapLon(map.containerPointToLatLng([x, 0]).lng);
+    for (let y = 0; y <= size.y; y++) latAt[y] = map.containerPointToLatLng([0, y]).lat;
     const spawn = () => ({ x: Math.random() * size.x, y: Math.random() * size.y, age: Math.floor(Math.random() * 80), max: 60 + Math.random() * 60 });
     const particles = Array.from({ length: count }, spawn);
     const k = 0.05;
@@ -387,10 +404,10 @@ export default function MapExplorer() {
       ctx.beginPath();
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
-        const ll = map.containerPointToLatLng([p.x, p.y]);
-        const lon = wrapLon(ll.lng);
-        const uu = sample(grid, u, ll.lat, lon);
-        const vv = sample(grid, v, ll.lat, lon);
+        const lat = latAt[p.y | 0];
+        const lon = lonAt[p.x | 0];
+        const uu = sample(grid, u, lat, lon);
+        const vv = sample(grid, v, lat, lon);
         if (Number.isNaN(uu) || p.age++ > p.max) {
           particles[i] = { ...spawn(), age: 0 };
           continue;
@@ -401,7 +418,7 @@ export default function MapExplorer() {
         ctx.lineTo(nx, ny);
         p.x = nx;
         p.y = ny;
-        if (nx < 0 || ny < 0 || nx > size.x || ny > size.y) particles[i] = { ...spawn(), age: 0 };
+        if (nx < 0 || ny < 0 || nx >= size.x || ny >= size.y) particles[i] = { ...spawn(), age: 0 };
       }
       ctx.stroke();
       rafRef.current = requestAnimationFrame(frame);
@@ -430,26 +447,36 @@ export default function MapExplorer() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    radarLayers.current.forEach((l) => l.remove());
-    radarLayers.current = [];
-    if (layer !== "radar") return;
-    radarLayers.current = radar.map((f) =>
-      L.tileLayer(f.url, { pane: "radar", opacity: 0, maxNativeZoom: 7, maxZoom: 15, attribution: "Radar © RainViewer" }).addTo(map),
+    radarStack.current?.clear();
+    radarStack.current = null;
+    if (layer !== "radar" || !radar.length) return;
+    radarStack.current = new FrameStack(
+      map,
+      (i) => L.tileLayer(radar[i].url, { pane: "radar", maxNativeZoom: 7, maxZoom: 15, updateWhenZooming: false, attribution: "Radar © RainViewer" }),
+      0.85,
     );
+    radarStack.current.show(radarIdx, radar.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer, radar]);
 
   useEffect(() => {
-    radarLayers.current.forEach((l, i) => l.setOpacity(i === radarIdx ? 0.85 : 0));
-  }, [radarIdx, radar, layer]);
+    radarStack.current?.show(radarIdx, radar.length);
+  }, [radarIdx, radar]);
 
   /* ─── Playback ────────────────────────────────────────── */
   useEffect(() => {
     if (!playing) return;
     const t = setInterval(() => {
-      if (layer === "radar") setRadarIdx((i) => (radar.length ? (i + 1) % radar.length : 0));
-      else if (layer === "satellite") setSatIdx((i) => (sat?.frames.length ? (i + 1) % sat.frames.length : 0));
+      // Only advance when the next frame has downloaded, so slow connections don't pile up requests.
+      if (layer === "radar")
+        setRadarIdx((i) => (radar.length && radarStack.current?.ready((i + 1) % radar.length) !== false ? (i + 1) % radar.length : i));
+      else if (layer === "satellite")
+        setSatIdx((i) => {
+          const n = sat?.frames.length ?? 0;
+          return n && satStack.current?.ready((i + 1) % n) !== false ? (i + 1) % n : i;
+        });
       else if (grid) setTimeIdx((i) => (i + 1) % grid.times.length);
-    }, layer === "radar" || layer === "satellite" ? 600 : 900);
+    }, layer === "radar" || layer === "satellite" ? 700 : 1000);
     return () => clearInterval(t);
   }, [playing, layer, grid, radar.length, sat]);
 
@@ -614,6 +641,41 @@ export default function MapExplorer() {
 
 function alertOnce() {
   toast("Location access is blocked. Allow it in your browser to see your local weather.", "error");
+}
+
+/**
+ * Animation frames for satellite / radar. Frames are created lazily (current + next only), so the
+ * browser downloads one frame at a time instead of every frame at once.
+ */
+class FrameStack {
+  private layers = new Map<number, L.TileLayer>();
+  constructor(
+    private map: L.Map,
+    private make: (i: number) => L.TileLayer,
+    private opacity: number,
+  ) {}
+  private ensure(i: number) {
+    if (this.layers.has(i)) return;
+    const l = this.make(i);
+    l.setOpacity(0);
+    l.addTo(this.map);
+    this.layers.set(i, l);
+  }
+  show(i: number, count: number) {
+    if (count <= 0) return;
+    this.ensure(i);
+    if (count > 1) this.ensure((i + 1) % count);
+    this.layers.forEach((l, k) => l.setOpacity(k === i ? this.opacity : 0));
+  }
+  /** true when frame i has finished downloading (or doesn't exist yet and can be created). */
+  ready(i: number) {
+    const l = this.layers.get(i) as (L.TileLayer & { isLoading?: () => boolean }) | undefined;
+    return !l || !l.isLoading || !l.isLoading();
+  }
+  clear() {
+    this.layers.forEach((l) => l.remove());
+    this.layers.clear();
+  }
 }
 
 function escapeHtml(s: string) {
