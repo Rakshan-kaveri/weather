@@ -77,6 +77,11 @@ export default function MapExplorer() {
       maxZoom: 15,
       zoomControl: false,
       worldCopyJump: true,
+      preferCanvas: true, // boundaries & tracks drawn on one canvas instead of hundreds of SVG nodes
+      zoomSnap: 0.5,
+      zoomDelta: 0.5,
+      wheelPxPerZoomLevel: 110,
+      wheelDebounceTime: 30,
       maxBounds: [
         [-85, -360],
         [85, 360],
@@ -134,7 +139,24 @@ export default function MapExplorer() {
       if (heatRef.current) heatRef.current.style.visibility = "hidden";
       if (flowRef.current) flowRef.current.style.visibility = "hidden";
     });
-    map.on("moveend zoomend resize", () => setViewTick((t) => t + 1));
+    // Blend modes and CSS filters are costly to repaint every animation frame, so pause them during pan/zoom.
+    const sat = map.getPane("sat")!;
+    map.on("movestart zoomstart", () => {
+      sat.dataset.blend = sat.style.mixBlendMode;
+      sat.dataset.filter = sat.style.filter;
+      sat.style.mixBlendMode = "";
+      sat.style.filter = "";
+    });
+    map.on("moveend zoomend", () => {
+      if (sat.dataset.blend !== undefined) sat.style.mixBlendMode = sat.dataset.blend;
+      if (sat.dataset.filter !== undefined) sat.style.filter = sat.dataset.filter;
+    });
+    let tick = 0;
+    map.on("moveend zoomend resize", () => {
+      // coalesce bursts of events (zoom fires both) into one re-render on the next frame
+      cancelAnimationFrame(tick);
+      tick = requestAnimationFrame(() => setViewTick((t) => t + 1));
+    });
 
     if (hasQuery) setSelected({ lat: qlat, lon: qlon, name: params.get("name") ?? undefined });
 
@@ -351,9 +373,14 @@ export default function MapExplorer() {
             interactive: false,
             style: lvl === 2 ? { color: "#ffffff", weight: 1, opacity: 0.55, fill: false } : { color: "#ffffff", weight: 0.7, opacity: 0.35, dashArray: "3 4", fill: false },
           }).addTo(group);
+          const inView = map.getBounds();
+          let count = 0;
+          const cap = lvl === 2 ? 70 : 120;
           for (const f of fc.features) {
             const props = f.properties as { name?: string; label?: [number, number] } | null;
             if (!props?.name || !props.label) continue;
+            if (!inView.contains([props.label[1], props.label[0]])) continue;
+            if (++count > cap) break;
             L.marker([props.label[1], props.label[0]], {
               pane: "admin",
               interactive: false,

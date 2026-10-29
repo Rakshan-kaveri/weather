@@ -2,6 +2,7 @@
  * Background worker: sends daily weather reports and evaluates alert rules.
  * Run alongside the web app:  npm run worker   (PM2 keeps it alive in production)
  */
+import "./env"; // must stay first: loads .env before config is read
 import cron from "node-cron";
 import { runDailyReports } from "../src/lib/deliver";
 import { runAlerts } from "../src/lib/alerts";
@@ -62,6 +63,10 @@ cron.schedule("20,50 * * * *", severe);
 cron.schedule("30 3 * * *", cleanup);
 
 console.log("SkyCast worker started — reports every 5 min, alerts hourly, severe-weather watch every 30 min.");
+console.log(
+  `[worker] email: ${process.env.RESEND_API_KEY ? "Resend" : process.env.SMTP_HOST ? "SMTP" : "NOT CONFIGURED (logging only)"} · ` +
+    `SMS: ${process.env.TEXTBEE_API_KEY && process.env.TEXTBEE_DEVICE_ID ? "textbee" : "NOT CONFIGURED (logging only)"}`,
+);
 void reports();
 void severe();
 
