@@ -193,14 +193,53 @@ function inPolygon(lon: number, lat: number, g: { type: string; coordinates: unk
   return polys.some((p) => p.length && pointInRing(lon, lat, p[0]));
 }
 
+/* ─── Which sea / which side of the peninsula ───────────
+   Cyclones near India form in two basins. The Western Ghats split peninsular India: a Bay of Bengal storm
+   reaching the west coast (or an Arabian Sea storm reaching the east coast) must cross the whole peninsula
+   and usually weakens a lot first. */
+export type Basin = "arabian" | "bay" | "other";
+type Side = "west" | "east" | "inland" | "other";
+
+export function basinOf(lat: number, lon: number): Basin {
+  if (lat < 5 || lat > 26) return "other";
+  if (lon >= 50 && lon <= 77.5) return "arabian";
+  if (lon >= 79 && lon <= 100) return "bay";
+  return "other";
+}
+
+/** Approximate longitude of the Western Ghats crest at a latitude (peninsular India). */
+function ghatsLon(lat: number) {
+  if (lat >= 16) return 73.9;
+  if (lat >= 13) return 74.9;
+  if (lat >= 11) return 75.9;
+  return 77.0;
+}
+
+export function coastSide(lat: number, lon: number): Side {
+  if (lat < 6 || lat > 22.5 || lon < 68 || lon > 88) return "other";
+  if (lon <= ghatsLon(lat)) return "west"; // Konkan, Goa, coastal Karnataka, Kerala
+  if (lon >= 79 || lat < 10) return "east"; // Coromandel, Andhra, Odisha coasts
+  return "inland"; // Deccan plateau
+}
+
+/** True when the storm is in the sea on the far side of the peninsula from this place. */
+function acrossPeninsula(place: Side, basin: Basin) {
+  return (place === "west" && basin === "bay") || (place === "east" && basin === "arabian");
+}
+
+const BASIN_NAME: Record<Basin, string> = { arabian: "in the Arabian Sea", bay: "in the Bay of Bengal", other: "" };
+
 export async function cycloneWarnings(lat: number, lon: number, cyclones: Cyclone[], today: string): Promise<Warning[]> {
   const out: Warning[] = [];
   for (const c of cyclones) {
     const now = distanceKm(lat, lon, c.lat, c.lon);
     if (now > 2500) continue; // nowhere near — skip the track lookup entirely
 
+    const side = coastSide(lat, lon);
     let closest = now;
     let closestTime: string | undefined;
+    let closestBasin = basinOf(c.lat, c.lon);
+    let closestLand = false; // forecast point over land (storm has made landfall / is crossing)
     let inCone = false;
     try {
       const track = await cycloneTrack(c.id, c.episodeId);
@@ -211,6 +250,8 @@ export async function cycloneWarnings(lat: number, lon: number, cyclones: Cyclon
           if (d < closest) {
             closest = d;
             closestTime = f.time;
+            closestBasin = basinOf(plat, plon);
+            closestLand = coastSide(plat, plon) !== "other" && closestBasin === "other";
           }
         } else if (f.kind === "area" && f.level === "cone" && inPolygon(lon, lat, f.geometry)) {
           inCone = true;
@@ -227,6 +268,17 @@ export async function cycloneWarnings(lat: number, lon: number, cyclones: Cyclon
     else if (closest <= CYCLONE_WATCH_KM) level = "watch";
     if (!level) continue;
 
+    // Coast rule: a storm that stays in the sea on the other side of the peninsula can't hit this coast
+    // directly. Only show a "watch" banner; if its track crosses over land towards us, lower severe → warning.
+    const basinNow = basinOf(c.lat, c.lon);
+    if (acrossPeninsula(side, closestBasin) || (acrossPeninsula(side, basinNow) && !closestLand && closestBasin !== "other")) {
+      if (closest > CYCLONE_SEVERE_KM) level = "watch";
+    } else if (acrossPeninsula(side, basinNow) && closestLand && level === "severe") {
+      level = "warning"; // crossing the peninsula: it will weaken before reaching this coast
+    }
+    // Storms weaken quickly once over land: if the closest approach is after landfall, cap at "warning".
+    if (closestLand && level === "severe") level = "warning";
+
     const approaching = closest < now - 25;
     const when = closestTime ? ` around ${closestTime.replace("T", " ").slice(5, 16)}` : "";
     out.push({
@@ -235,8 +287,9 @@ export async function cycloneWarnings(lat: number, lon: number, cyclones: Cyclon
       title: approaching ? `Cyclone ${c.name} forecast to pass ${km} km away` : `Cyclone ${c.name} ${km} km away`,
       message:
         (approaching
-          ? `Tropical cyclone ${c.name} is now ${Math.round(now)} km away and forecast to pass about ${km} km from this place${when}.`
-          : `Tropical cyclone ${c.name} is ${km} km from this place.`) +
+          ? `Tropical cyclone ${c.name} (${BASIN_NAME[basinNow] || "nearby"}) is now ${Math.round(now)} km away and forecast to pass about ${km} km from this place${when}.`
+          : `Tropical cyclone ${c.name} ${BASIN_NAME[basinNow] ? BASIN_NAME[basinNow] + " " : ""}is ${km} km from this place.`) +
+        (acrossPeninsula(side, basinNow) ? ` It is on the ${side === "west" ? "east" : "west"} side of the peninsula; expect mainly rain and gusty wind here, not the full storm.` : "") +
         (inCone ? " This place is inside the forecast cone." : "") +
         ` GDACS ${c.alertLevel} alert${c.severity ? ` (${c.severity})` : ""}.` +
         (level === "watch" ? " Keep an eye on updates." : " Follow IMD and district administration advisories, keep phones charged, store drinking water and stay away from the coast."),
