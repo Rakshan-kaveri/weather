@@ -1,0 +1,261 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Channel {
+  EMAIL
+  SMS
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  BOUNCED
+  FAILED
+  SKIPPED
+}
+
+// ─── Auth (NextAuth / Auth.js) ───────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          Role      @default(USER)
+  blocked       Boolean   @default(false)
+  phone         String?
+
+  // Display preferences
+  tempUnit   String @default("C") // C | F
+  windUnit   String @default("kmh") // kmh | ms | mph | kn
+  timeFormat String @default("24") // 12 | 24
+  theme      String @default("dark") // dark | light
+
+  // Last sign-in / last seen location (approximate)
+  lastLoginAt     DateTime?
+  lastSeenAt      DateTime?
+  lastIp          String?
+  lastCity        String?
+  lastRegion      String?
+  lastCountry     String?
+  lastLat         Float?
+  lastLon         Float?
+  lastLocationSrc String? // ip | gps
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  places        Place[]
+  subscriptions Subscription[]
+  alerts        AlertRule[]
+  notifications Notification[]
+  logins        LoginEvent[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── App data ────────────────────────────────────────────
+
+model LoginEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  at        DateTime @default(now())
+  ip        String?
+  city      String?
+  region    String?
+  country   String?
+  lat       Float?
+  lon       Float?
+  source    String   @default("ip") // ip | gps
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, at])
+}
+
+model Place {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  region    String?
+  country   String?
+  lat       Float
+  lon       Float
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A daily weather report sent by email or SMS.
+/// userId is optional so an admin can register SMS-only subscribers (e.g. farmers without a Google account).
+model Subscription {
+  id          String  @id @default(cuid())
+  userId      String?
+  channel     Channel
+  email       String?
+  phone       String?
+  contactName String?
+
+  placeName String
+  lat       Float
+  lon       Float
+  timezone  String @default("Asia/Kolkata")
+  sendTime  String @default("07:00") // HH:mm in `timezone`
+  days      Int[]  @default([0, 1, 2, 3, 4, 5, 6]) // 0 = Sunday
+  forecastDay String @default("today") // today | tomorrow
+
+  format       String  @default("short") // short | detailed
+  language     String  @default("en") // en | kn | hi
+  includeTemp  Boolean @default(true)
+  includeRain  Boolean @default(true)
+  includeWind  Boolean @default(true)
+  includeAqi   Boolean @default(true)
+  includeTips  Boolean @default(true)
+  farmerTips   Boolean @default(false)
+
+  active           Boolean   @default(true)
+  unsubscribeToken String    @unique @default(cuid())
+  lastSentAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user       User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@index([active])
+}
+
+model Delivery {
+  id             String         @id @default(cuid())
+  subscriptionId String?
+  alertRuleId    String?
+  userId         String?
+  channel        Channel
+  to             String
+  kind           String // daily | alert | test | resend
+  forDate        String // YYYY-MM-DD in the subscriber's timezone
+  status         DeliveryStatus @default(QUEUED)
+  providerId     String?
+  subject        String?
+  preview        String?        @db.Text
+  error          String?        @db.Text
+  attempts       Int            @default(0)
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  openedAt       DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([subscriptionId, forDate, kind])
+  @@index([providerId])
+  @@index([createdAt])
+  @@index([status])
+}
+
+model AlertRule {
+  id          String   @id @default(cuid())
+  userId      String
+  placeName   String
+  lat         Float
+  lon         Float
+  timezone    String   @default("Asia/Kolkata")
+  metric      String // rain_prob | precip_sum | temp_max | temp_min | wind_max | aqi
+  operator    String // gt | lt
+  threshold   Float
+  day         String   @default("tomorrow") // today | tomorrow
+  notifyEmail Boolean  @default(true)
+  notifyInApp Boolean  @default(true)
+  notifySms   Boolean  @default(false)
+  active      Boolean  @default(true)
+  lastTriggeredFor String?
+  lastTriggeredAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+/// One row per scheduler run, used by the admin "scheduler health" panel.
+model JobRun {
+  id         String    @id @default(cuid())
+  job        String // daily-reports | alerts
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  ok         Boolean   @default(true)
+  processed  Int       @default(0)
+  sent       Int       @default(0)
+  failed     Int       @default(0)
+  message    String?   @db.Text
+
+  @@index([job, startedAt])
+}
