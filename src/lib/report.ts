@@ -13,6 +13,15 @@ export type Report = {
   forDate: string;
 };
 
+/** "Thu, 29 Oct, 10:30 pm" in the subscriber's language and timezone. */
+function issuedAt(timeZone: string, lang: Lang) {
+  try {
+    return new Date().toLocaleString(REPORT_TEXT[lang].locale, { timeZone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return new Date().toISOString().slice(0, 16).replace("T", " ");
+  }
+}
+
 type Ctx = { day: DayPoint; forecast: Forecast; aqi: AirQuality | null; sub: Subscription; lang: Lang; farm: FarmItem[] };
 
 /** Weather condition in the report language (English keeps the more precise WMO wording). */
@@ -24,7 +33,10 @@ function condition(code: number, lang: Lang) {
 export function generalTips({ day, lang }: Pick<Ctx, "day" | "lang">) {
   const s = STRINGS[lang];
   const tips: string[] = [];
-  if (day.precipProbMax >= 50 || day.precipSum >= 2) tips.push(s.tipUmbrella);
+  // Umbrella only when rain is actually expected: a rainy weather code with real rainfall,
+  // or a high chance of meaningful rain. A brief 50% blip on a sunny day doesn't count.
+  const wet = ["drizzle", "rain", "heavy-rain", "storm"].includes(describe(day.weatherCode).icon);
+  if ((wet && day.precipSum >= 1) || (day.precipProbMax >= 70 && day.precipSum >= 2)) tips.push(s.tipUmbrella);
   if (day.tempMax >= 37) tips.push(s.tipHeat);
   if (day.tempMin <= 10) tips.push(s.tipCold);
   if (day.uvMax >= 8 && day.precipProbMax < 50) tips.push(s.tipUv);
@@ -61,7 +73,8 @@ export function smsText({ day, aqi, sub, lang, farm }: Ctx, withStop = true) {
   const s = STRINGS[lang];
   const t = REPORT_TEXT[lang];
   const when = sub.forecastDay === "tomorrow" ? s.tomorrow : s.today;
-  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${localDate(day.date, lang, "short")}: ${condition(day.weatherCode, lang)}`];
+  const hhmm = new Date().toLocaleTimeString("en-GB", { timeZone: sub.timezone, hour: "2-digit", minute: "2-digit" });
+  const parts: string[] = [`${APP_NAME} ${sub.placeName} ${when} ${localDate(day.date, lang, "short")} (${t.issued} ${hhmm}): ${condition(day.weatherCode, lang)}`];
   if (sub.includeTemp) parts.push(`${s.max} ${Math.round(day.tempMax)}°C ${s.min} ${Math.round(day.tempMin)}°C`);
   if (sub.includeRain) parts.push(`${s.rainChance} ${day.precipProbMax}% (${day.precipSum.toFixed(1)} ${t.mm})`);
   if (sub.includeWind) parts.push(`${s.wind} ${Math.round(day.windMax)} ${t.kmh} ${compassWord(day.windDirection, lang)}`);
@@ -192,7 +205,7 @@ function emailHtml(ctx: Ctx) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;background:#111827;border:1px solid #1f2a3d;border-radius:12px;overflow:hidden">
 <tr><td style="padding:14px 22px;border-bottom:1px solid #1f2a3d">
   <span style="font-weight:700;font-size:14px;color:#e8edf6">${APP_NAME}</span>
-  <span style="float:right;font-size:12px;color:#7f8ba3">${esc(localDate(day.date, lang))}</span>
+  <span style="float:right;font-size:11px;color:#7f8ba3;text-align:right">${esc(localDate(day.date, lang))}<br><span style="color:#5d6880">${esc(t.issued)} ${esc(issuedAt(sub.timezone, lang))}</span></span>
 </td></tr>
 <tr><td style="padding:20px 22px 4px">
   <div style="font-size:12px;color:#7f8ba3;letter-spacing:.04em">${esc(sub.placeName)} · ${esc(when)}</div>

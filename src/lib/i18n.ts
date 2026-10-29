@@ -174,6 +174,7 @@ type Dict = {
   uvMax: string;
   sunshine: string;
   hours: string;
+  issued: string;
   tipsHeading: string;
   farmHeading: string;
   openForecast: string;
@@ -208,6 +209,7 @@ const T_EN: Dict = {
   uvMax: "UV max",
   sunshine: "Sunshine",
   hours: "h",
+  issued: "Issued",
   tipsHeading: "Tips for the day",
   farmHeading: "Farm advisory",
   openForecast: "Open full forecast",
@@ -279,6 +281,7 @@ const T_KN: Dict = {
   uvMax: "ಗರಿಷ್ಠ UV",
   sunshine: "ಬಿಸಿಲು",
   hours: "ಗಂಟೆ",
+  issued: "ಪ್ರಕಟಣೆ",
   tipsHeading: "ಇಂದಿನ ಸಲಹೆಗಳು",
   farmHeading: "ಕೃಷಿ ಸಲಹೆ",
   openForecast: "ಪೂರ್ಣ ಮುನ್ಸೂಚನೆ ನೋಡಿ",
@@ -350,6 +353,7 @@ const T_HI: Dict = {
   uvMax: "अधिकतम UV",
   sunshine: "धूप",
   hours: "घंटे",
+  issued: "जारी",
   tipsHeading: "आज के सुझाव",
   farmHeading: "कृषि सलाह",
   openForecast: "पूरा पूर्वानुमान देखें",

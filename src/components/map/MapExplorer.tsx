@@ -292,46 +292,76 @@ export default function MapExplorer() {
         .then((r) => r.json())
         .then((d: { features: TF[] }) => {
           const feats = d.features ?? [];
-          // Forecast cone: soft translucent area, no hard edges
-          for (const f of feats.filter((x) => x.kind === "area" && x.level === "cone")) {
-            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
-              pane: "tracks",
-              interactive: false,
-              style: { color: "#ffffff", weight: 1, opacity: 0.22, fillColor: "#c8ced8", fillOpacity: 0.16, lineJoin: "round" },
-            }).addTo(tracks);
-          }
-          // Track lines: thin, past solid, forecast lighter
-          for (const f of feats.filter((x) => x.kind === "past" || x.kind === "forecast")) {
-            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
-              pane: "tracks",
-              interactive: false,
-              style: f.kind === "past" ? { color: "#ffffff", weight: 1.6, opacity: 0.85, lineCap: "round" } : { color: "#ffffff", weight: 1.4, opacity: 0.45, lineCap: "round" },
-            }).addTo(tracks);
-          }
-          // Track points: small dots coloured by intensity; forecast points hollow
-          let latest: { wind?: number; time?: string } | null = null;
-          for (const f of feats.filter((x) => x.kind === "point")) {
-            const forecast = f.level === "cone" || /forecast/i.test(f.label ?? "");
-            const cls = imdClass(f.windKmh);
-            if (!forecast && f.windKmh != null && (!latest || (f.time ?? "") > (latest.time ?? ""))) latest = { wind: f.windKmh, time: f.time };
-            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
-              pane: "tracks",
-              pointToLayer: (_p, ll) =>
-                L.circleMarker(ll, {
-                  pane: "tracks",
-                  radius: forecast ? 3.5 : 4,
-                  weight: forecast ? 1.5 : 1,
-                  color: forecast ? cls?.color ?? "#ffffff" : "rgba(0,0,0,0.55)",
-                  fillColor: cls?.color ?? "#ffffff",
-                  fillOpacity: forecast ? 0.15 : 1,
-                }),
+          // Ordered track points (past → forecast)
+          const pts = feats
+            .filter((x) => x.kind === "point" && x.geometry.type === "Point")
+            .map((x) => {
+              const [plon, plat] = (x.geometry as GeoJSON.Point).coordinates;
+              const forecast = x.level === "cone" || /forecast/i.test(x.label ?? "");
+              return { lat: plat, lon: plon, time: x.time, wind: x.windKmh, forecast, cls: imdClass(x.windKmh) };
             })
-              .bindTooltip(
-                `<b>${escapeHtml(c.name)}</b>${f.time ? ` · ${escapeHtml(f.time.replace("T", " ").slice(5, 16))}` : ""}${f.windKmh != null ? `<br>${f.windKmh} km/h · ${cls?.name ?? ""}` : ""}${forecast ? "<br><i>Forecast</i>" : ""}`,
-                { direction: "top", offset: [0, -5], className: "tc-tip" },
+            .sort((p1, p2) => (p1.time ?? "").localeCompare(p2.time ?? ""));
+
+          // 1. Forecast cone: a smooth, rounded envelope that widens with forecast uncertainty
+          const future = pts.filter((p) => p.forecast);
+          const conePolys = future.length
+            ? [smoothCone([{ lat: c.lat, lon: c.lon, r: 35 }, ...future.map((p, i) => ({ lat: p.lat, lon: p.lon, r: 60 + 45 * i }))])]
+            : feats.filter((x) => x.kind === "area" && x.level === "cone").map((x) => x.geometry);
+          for (const g of conePolys) {
+            L.geoJSON({ type: "Feature", properties: {}, geometry: g } as GeoJSON.Feature, {
+              pane: "tracks",
+              interactive: false,
+              style: { stroke: true, color: "#ffffff", weight: 1, opacity: 0.18, fillColor: "#d9dee8", fillOpacity: 0.2, lineJoin: "round" },
+            }).addTo(tracks);
+          }
+
+          // 2. Track: dark casing + segments coloured by intensity (forecast part lighter)
+          if (pts.length > 1) {
+            L.polyline(pts.map((p) => [p.lat, p.lon] as L.LatLngTuple), { pane: "tracks", color: "#000", weight: 5, opacity: 0.35, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(tracks);
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p = pts[i];
+              L.polyline(
+                [
+                  [p.lat, p.lon],
+                  [pts[i + 1].lat, pts[i + 1].lon],
+                ],
+                { pane: "tracks", color: (pts[i + 1].forecast ? pts[i + 1].cls : p.cls)?.color ?? "#ffffff", weight: 2.6, opacity: pts[i + 1].forecast ? 0.7 : 1, interactive: false, lineCap: "round" },
+              ).addTo(tracks);
+            }
+          } else {
+            // no point list: fall back to GDACS lines
+            for (const f of feats.filter((x) => x.kind === "past" || x.kind === "forecast")) {
+              L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
+                pane: "tracks",
+                interactive: false,
+                style: { color: "#ffffff", weight: 2, opacity: f.kind === "past" ? 0.9 : 0.5 },
+              }).addTo(tracks);
+            }
+          }
+
+          // 3. Points with date & time labels (local time)
+          const past = pts.filter((p) => !p.forecast && p.wind != null);
+          const latest = past.length ? { wind: past[past.length - 1].wind as number } : null;
+          const step = pts.length > 10 ? 2 : 1;
+          pts.forEach((p, i) => {
+            const color = p.cls?.color ?? "#ffffff";
+            const m = L.circleMarker([p.lat, p.lon], {
+              pane: "tracks",
+              radius: 5,
+              weight: p.forecast ? 2 : 1.5,
+              color: p.forecast ? color : "rgba(0,0,0,0.6)",
+              fillColor: p.forecast ? "#ffffff" : color,
+              fillOpacity: 1,
+            })
+              .bindPopup(
+                `<div class="tc-pop"><div class="tc-pop-name">${escapeHtml(c.name)}${p.forecast ? " · forecast" : ""}</div>${p.time ? `<div>${escapeHtml(fmtTrackTime(p.time, true))}</div>` : ""}${p.wind != null ? `<div style="color:${color};font-weight:600">${p.wind} km/h · ${escapeHtml(p.cls?.name ?? "")}</div>` : ""}</div>`,
               )
               .addTo(tracks);
-          }
+            const isNow = !p.forecast && (i === pts.length - 1 || pts[i + 1].forecast);
+            if (p.time && !isNow && (i % step === 0 || i === pts.length - 1)) {
+              m.bindTooltip(fmtTrackTime(p.time), { permanent: true, direction: "right", offset: [7, 0], className: `tc-time${p.forecast ? " tc-time-fc" : ""}` });
+            }
+          });
           const now = imdClass(latest?.wind) ?? fallback;
           marker.setIcon(cycloneIcon(c.name, now));
           marker.setPopupContent(cyclonePopup(c, now, latest?.wind));
@@ -855,12 +885,53 @@ function imdClass(windKmh?: number | null): ImdClass | null {
   return cls ?? { min: 0, name: "Low pressure area", short: "L", color: "#a9b4c6" };
 }
 
+/** Rounded forecast cone: convex hull of circles (radius in km) around each forecast position. */
+function smoothCone(points: { lat: number; lon: number; r: number }[]): GeoJSON.Polygon {
+  const samples: [number, number][] = [];
+  for (const p of points) {
+    const kLat = p.r / 111;
+    const kLon = p.r / (111 * Math.max(0.2, Math.cos((p.lat * Math.PI) / 180)));
+    for (let a = 0; a < 32; a++) {
+      const t = (a / 32) * 2 * Math.PI;
+      samples.push([p.lon + kLon * Math.cos(t), p.lat + kLat * Math.sin(t)]);
+    }
+  }
+  // Andrew's monotone-chain convex hull
+  const pts = samples.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: [number, number][] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: [number, number][] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  const hull = [...lower.slice(0, -1), ...upper.slice(0, -1)];
+  return { type: "Polygon", coordinates: [[...hull, hull[0]]] };
+}
+
+/** GDACS times are UTC; show them in the viewer's local time, e.g. "Fri 30, 05:30". */
+function fmtTrackTime(t: string, long = false) {
+  const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : `${t}Z`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return t.replace("T", " ").slice(5, 16);
+  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleString("en-IN", o);
+  const hm = part({ hour: "2-digit", minute: "2-digit", hour12: false });
+  return long
+    ? `${part({ weekday: "long" })}, ${part({ day: "numeric" })} ${part({ month: "short" })} · ${hm}`
+    : `${part({ weekday: "short" })} ${part({ day: "numeric" })} ${part({ month: "short" })}, ${hm}`;
+}
+
 function cycloneIcon(name: string, cls: ImdClass) {
   return L.divIcon({
     className: "",
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-    html: `<div class="tc-marker" style="--c:${cls.color}"><svg viewBox="0 0 32 32" width="26" height="26"><path d="M16 9.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 3.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z" fill="var(--c)" stroke="#fff" stroke-width="1.2"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="var(--c)" stroke-width="2" stroke-linecap="round"/></svg><span class="tc-tag">${escapeHtml(name.toUpperCase())}<em>${cls.short}</em></span></div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    html: `<div class="tc-marker" style="--c:${cls.color}"><svg viewBox="0 0 32 32" width="34" height="34"><path d="M16 9.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 3.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z" fill="var(--c)" stroke="#fff" stroke-width="1.2"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="var(--c)" stroke-width="2" stroke-linecap="round"/></svg><span class="tc-tag">${escapeHtml(name.toUpperCase())}<em>${cls.short}</em></span></div>`,
   });
 }
 
