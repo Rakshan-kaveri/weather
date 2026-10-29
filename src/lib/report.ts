@@ -79,7 +79,7 @@ function emailText(ctx: Ctx) {
   const { sub, lang, day } = ctx;
   const t = REPORT_TEXT[lang];
   const dn = (d: string) => localDate(d, lang, "short");
-  const farmLines = ctx.farm.map((i) => `- ${t.farmTitles[i.key]}: ${t.farm(i, dn)}`).join("\n");
+  const farmLines = keyFarmItems(ctx.farm).map((i) => `- ${t.farmTitles[i.key]}: ${t.farm(i, dn)}`).join("\n");
   return [
     subjectLine(ctx),
     localDate(day.date, lang),
@@ -106,6 +106,29 @@ function farmTone(i: FarmItem): string {
   if (i.key === "spray" && !i.ok) return "#ff9a3c";
   if (i.key === "fertilizer" && i.advice === "avoid") return "#ff9a3c";
   return FARM_ICON[i.key];
+}
+
+/** Keep the email short: only items that call for action, most important first. */
+function keyFarmItems(farm: FarmItem[]) {
+  const keep = farm.filter((i) => {
+    switch (i.key) {
+      case "soil":
+      case "sowing":
+        return false;
+      case "disease":
+        return i.risk !== "low";
+      case "livestock":
+        return i.level !== "ok";
+      case "fertilizer":
+        return i.advice !== "irrigate";
+      case "harvest":
+        return i.good;
+      default:
+        return true;
+    }
+  });
+  const order: FarmItem["key"][] = ["heavyRain", "spray", "irrigation", "disease", "livestock", "wind", "fertilizer", "harvest", "outlook"];
+  return keep.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key)).slice(0, 6);
 }
 
 function emailHtml(ctx: Ctx) {
@@ -145,19 +168,21 @@ function emailHtml(ctx: Ctx) {
   if (sub.includeWind) stats.push(stat(t.wind, `${Math.round(day.windMax)} ${t.kmh} ${compassWord(day.windDirection, lang)}`));
   if (sub.includeAqi && aqi?.usAqi != null && sub.forecastDay === "today") stats.push(stat(t.airQuality, `${Math.round(aqi.usAqi)} · ${aqiWord(aqi.usAqi, lang)}`));
 
-  const tips = sub.includeTips ? generalTips({ day, lang }) : [];
+  const tips = sub.includeTips && !farm.length ? generalTips({ day, lang }).slice(0, 1) : [];
   const detailed = sub.format === "detailed";
   const row = (cells: string) => `<tr><td style="padding:14px 22px 0">${cells}</td></tr>`;
 
-  const farmHtml = farm.length
+  const items = keyFarmItems(farm);
+  const farmHtml = items.length
     ? row(
-        `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7fd36b;font-weight:700;margin:6px 0 8px">${esc(t.farmHeading)}</div>` +
-          farm
+        `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7fd36b;font-weight:700;margin:4px 0 6px">${esc(t.farmHeading)}</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">` +
+          items
             .map(
               (i) =>
-                `<div style="background:#0d1422;border:1px solid #1f2a3d;border-left:3px solid ${farmTone(i)};border-radius:8px;padding:9px 11px;margin-bottom:7px"><div style="font-size:11px;font-weight:700;color:${farmTone(i)};margin-bottom:2px">${esc(t.farmTitles[i.key])}</div><div style="font-size:13px;line-height:1.5;color:#dbe6f7">${esc(t.farm(i, dn))}</div></div>`,
+                `<tr><td style="padding:6px 0;border-bottom:1px solid #1a2333;vertical-align:top;width:4px"><div style="width:3px;height:16px;border-radius:2px;background:${farmTone(i)}"></div></td><td style="padding:6px 0 6px 9px;border-bottom:1px solid #1a2333;font-size:12.5px;line-height:1.45;color:#dbe6f7"><b style="color:${farmTone(i)}">${esc(t.farmTitles[i.key])}:</b> ${esc(t.farm(i, dn))}</td></tr>`,
             )
-            .join(""),
+            .join("") +
+          `</table>`,
       )
     : "";
 
@@ -175,12 +200,13 @@ function emailHtml(ctx: Ctx) {
   <div style="font-size:15px;color:#cfd7e6">${esc(condition(day.weatherCode, lang))}</div>
 </td></tr>
 ${stats.length ? `<tr><td style="padding:14px 14px 2px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d1422;border:1px solid #1f2a3d;border-radius:8px"><tr>${stats.join("")}</tr></table></td></tr>` : ""}
-${detailed && periods.length ? row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${periods
+${detailed && periods.length ? row(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${periods
+    .slice(0, 3)
     .map(
       (p) =>
-        `<tr><td style="padding:7px 0;border-bottom:1px solid #1a2333;color:#7f8ba3;font-size:12px;width:28%">${esc(p.label)}</td><td style="padding:7px 0;border-bottom:1px solid #1a2333;font-size:13px">${esc(p.cond)}</td><td style="padding:7px 0;border-bottom:1px solid #1a2333;text-align:right;font-size:13px">${Math.round(p.temp)}° · ${p.rain}%</td></tr>`,
+        `<td style="width:33%;padding:6px 4px;text-align:center;border:1px solid #1a2333;font-size:12px"><div style="color:#7f8ba3;font-size:11px">${esc(p.label)}</div><div style="color:#e8edf6;margin-top:2px">${Math.round(p.temp)}° · ${p.rain}%</div><div style="color:#9aa6bd;font-size:11px">${esc(p.cond)}</div></td>`,
     )
-    .join("")}</table>`) : ""}
+    .join("")}</tr></table>`) : ""}
 ${detailed ? `<tr><td style="padding:10px 22px 0;font-size:12px;color:#7f8ba3">${esc(t.sunrise)} ${day.sunrise.slice(11, 16)} · ${esc(t.sunset)} ${day.sunset.slice(11, 16)} · ${esc(t.uvMax)} ${Math.round(day.uvMax)}${day.sunshineHours != null ? ` · ${esc(t.sunshine)} ${day.sunshineHours.toFixed(1)} ${esc(t.hours)}` : ""}</td></tr>` : ""}
 ${tips.length ? row(`<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8fb8ff;font-weight:700;margin:6px 0 8px">${esc(t.tipsHeading)}</div>${tips.map((x) => `<div style="background:#13233b;border-left:3px solid #4ea8ff;padding:8px 11px;border-radius:6px;margin-bottom:7px;font-size:13px;color:#dbe6f7">${esc(x)}</div>`).join("")}`) : ""}
 ${farmHtml}

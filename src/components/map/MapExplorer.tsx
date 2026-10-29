@@ -252,68 +252,67 @@ export default function MapExplorer() {
 
   useEffect(() => {
     const group = cycloneLayer.current;
-    if (!group) return;
-    group.clearLayers();
-    const color = { Green: "#3ecf8e", Orange: "#ff9a3c", Red: "#ff5a5a" };
-    for (const c of cyclones) {
-      const icon = L.divIcon({
-        className: "",
-        iconSize: [44, 44],
-        iconAnchor: [22, 22],
-        html: `<div class="cyclone-marker" style="--c:${color[c.alertLevel]}"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M5 9c2-5 9-6 12-2M19 15c-2 5-9 6-12 2M9 4c-4 3-4 9 0 11M15 20c4-3 4-9 0-11"/></svg></div>`,
-      });
-      L.marker([c.lat, c.lon], { icon, pane: "cyclones", title: c.name })
-        .bindPopup(
-          `<strong>Cyclone ${escapeHtml(c.name)}</strong><br>${c.alertLevel} alert${c.severity ? ` · ${escapeHtml(c.severity)}` : ""}<br><a href="${c.link}" target="_blank" rel="noreferrer">Track & impact (GDACS)</a>`,
-        )
-        .addTo(group);
-    }
-
-    // Track history, forecast path and wind-impact areas for each cyclone
     const tracks = trackLayer.current;
-    tracks?.clearLayers();
-    if (!tracks) return;
+    if (!group || !tracks) return;
+    group.clearLayers();
+    tracks.clearLayers();
     const ctrl = new AbortController();
-    type TF = { kind: "past" | "forecast" | "point" | "area"; level?: string; label?: string; geometry: GeoJSON.Geometry };
+    type TF = { kind: "past" | "forecast" | "point" | "area"; level?: string; label?: string; windKmh?: number; time?: string; geometry: GeoJSON.Geometry };
+
     for (const c of cyclones) {
+      // Current position: the standard tropical-cyclone symbol, coloured by IMD intensity class once the track is known.
+      const fallback = c.alertLevel === "Red" ? IMD_CLASSES[5] : c.alertLevel === "Orange" ? IMD_CLASSES[3] : IMD_CLASSES[2];
+      const marker = L.marker([c.lat, c.lon], { icon: cycloneIcon(c.name, fallback), pane: "cyclones", title: c.name, riseOnHover: true })
+        .bindPopup(cyclonePopup(c, fallback, undefined))
+        .addTo(group);
+
       fetch(`/api/cyclones/track?id=${encodeURIComponent(c.id)}${c.episodeId ? `&episode=${encodeURIComponent(c.episodeId)}` : ""}`, { signal: ctrl.signal })
         .then((r) => r.json())
         .then((d: { features: TF[] }) => {
-          const areaStyle = (lvl?: string): L.PathOptions =>
-            lvl === "Red"
-              ? { color: "#ff5a5a", weight: 1, fillColor: "#ff5a5a", fillOpacity: 0.12 }
-              : lvl === "Orange"
-                ? { color: "#ff9a3c", weight: 1, fillColor: "#ff9a3c", fillOpacity: 0.12 }
-                : lvl === "Green"
-                  ? { color: "#3ecf8e", weight: 1, fillColor: "#3ecf8e", fillOpacity: 0.08 }
-                  : { color: "#9aa3b5", weight: 1, fillColor: "#5b6475", fillOpacity: 0.35 };
-          // areas first so lines and points sit on top
-          const order = { area: 0, past: 1, forecast: 2, point: 3 };
-          for (const f of [...d.features].sort((a, b) => order[a.kind] - order[b.kind])) {
-            const gj = { type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature;
-            if (f.kind === "area") L.geoJSON(gj, { pane: "tracks", style: areaStyle(f.level), interactive: false }).addTo(tracks);
-            else if (f.kind === "past" || f.kind === "forecast")
-              L.geoJSON(gj, {
-                pane: "tracks",
-                interactive: false,
-                style: f.kind === "past" ? { color: "#ff4d6d", weight: 2.5 } : { color: "#ffb347", weight: 2, dashArray: "6 6" },
-              }).addTo(tracks);
-            else
-              L.geoJSON(gj, {
-                pane: "tracks",
-                pointToLayer: (_p, ll) =>
-                  L.circleMarker(ll, {
-                    pane: "tracks",
-                    radius: 4.5,
-                    weight: 1.5,
-                    color: "#fff",
-                    fillColor: f.level === "cone" ? "#ffb347" : f.level === "Red" ? "#ff4d6d" : f.level === "Orange" ? "#ff9a3c" : "#ff4d6d",
-                    fillOpacity: 1,
-                  }),
-              })
-                .bindTooltip(f.label ? `${escapeHtml(c.name)} · ${escapeHtml(f.label)}` : escapeHtml(c.name), { direction: "top", offset: [0, -4] })
-                .addTo(tracks);
+          const feats = d.features ?? [];
+          // Forecast cone: soft translucent area, no hard edges
+          for (const f of feats.filter((x) => x.kind === "area" && x.level === "cone")) {
+            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
+              pane: "tracks",
+              interactive: false,
+              style: { color: "#ffffff", weight: 1, opacity: 0.22, fillColor: "#c8ced8", fillOpacity: 0.16, lineJoin: "round" },
+            }).addTo(tracks);
           }
+          // Track lines: thin, past solid, forecast lighter
+          for (const f of feats.filter((x) => x.kind === "past" || x.kind === "forecast")) {
+            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
+              pane: "tracks",
+              interactive: false,
+              style: f.kind === "past" ? { color: "#ffffff", weight: 1.6, opacity: 0.85, lineCap: "round" } : { color: "#ffffff", weight: 1.4, opacity: 0.45, lineCap: "round" },
+            }).addTo(tracks);
+          }
+          // Track points: small dots coloured by intensity; forecast points hollow
+          let latest: { wind?: number; time?: string } | null = null;
+          for (const f of feats.filter((x) => x.kind === "point")) {
+            const forecast = f.level === "cone" || /forecast/i.test(f.label ?? "");
+            const cls = imdClass(f.windKmh);
+            if (!forecast && f.windKmh != null && (!latest || (f.time ?? "") > (latest.time ?? ""))) latest = { wind: f.windKmh, time: f.time };
+            L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
+              pane: "tracks",
+              pointToLayer: (_p, ll) =>
+                L.circleMarker(ll, {
+                  pane: "tracks",
+                  radius: forecast ? 3.5 : 4,
+                  weight: forecast ? 1.5 : 1,
+                  color: forecast ? cls?.color ?? "#ffffff" : "rgba(0,0,0,0.55)",
+                  fillColor: cls?.color ?? "#ffffff",
+                  fillOpacity: forecast ? 0.15 : 1,
+                }),
+            })
+              .bindTooltip(
+                `<b>${escapeHtml(c.name)}</b>${f.time ? ` · ${escapeHtml(f.time.replace("T", " ").slice(5, 16))}` : ""}${f.windKmh != null ? `<br>${f.windKmh} km/h · ${cls?.name ?? ""}` : ""}${forecast ? "<br><i>Forecast</i>" : ""}`,
+                { direction: "top", offset: [0, -5], className: "tc-tip" },
+              )
+              .addTo(tracks);
+          }
+          const now = imdClass(latest?.wind) ?? fallback;
+          marker.setIcon(cycloneIcon(c.name, now));
+          marker.setPopupContent(cyclonePopup(c, now, latest?.wind));
         })
         .catch(() => {});
     }
@@ -808,6 +807,38 @@ class FrameStack {
     this.layers.forEach((l) => l.remove());
     this.layers.clear();
   }
+}
+
+/* IMD intensity classes for North Indian Ocean cyclones (maximum sustained wind, km/h). */
+type ImdClass = { min: number; name: string; short: string; color: string };
+const IMD_CLASSES: ImdClass[] = [
+  { min: 31, name: "Depression", short: "D", color: "#6fc3ff" },
+  { min: 50, name: "Deep Depression", short: "DD", color: "#4fd1a5" },
+  { min: 62, name: "Cyclonic Storm", short: "CS", color: "#f2d24b" },
+  { min: 89, name: "Severe Cyclonic Storm", short: "SCS", color: "#f7a541" },
+  { min: 118, name: "Very Severe Cyclonic Storm", short: "VSCS", color: "#f26b3a" },
+  { min: 166, name: "Extremely Severe Cyclonic Storm", short: "ESCS", color: "#e3365f" },
+  { min: 222, name: "Super Cyclonic Storm", short: "SuCS", color: "#b43ad6" },
+];
+
+function imdClass(windKmh?: number | null): ImdClass | null {
+  if (windKmh == null || !Number.isFinite(windKmh)) return null;
+  let cls: ImdClass | null = null;
+  for (const c of IMD_CLASSES) if (windKmh >= c.min) cls = c;
+  return cls ?? { min: 0, name: "Low pressure area", short: "L", color: "#a9b4c6" };
+}
+
+function cycloneIcon(name: string, cls: ImdClass) {
+  return L.divIcon({
+    className: "",
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+    html: `<div class="tc-marker" style="--c:${cls.color}"><svg viewBox="0 0 32 32" width="26" height="26"><path d="M16 9.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 3.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z" fill="var(--c)" stroke="#fff" stroke-width="1.2"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="var(--c)" stroke-width="2" stroke-linecap="round"/></svg><span class="tc-tag">${escapeHtml(name.toUpperCase())}<em>${cls.short}</em></span></div>`,
+  });
+}
+
+function cyclonePopup(c: { name: string; alertLevel: string; severity: string; link: string }, cls: ImdClass, wind?: number) {
+  return `<div class="tc-pop"><div class="tc-pop-name">Cyclone ${escapeHtml(c.name)}</div><div style="color:${cls.color};font-weight:600">${escapeHtml(cls.name)}${wind != null ? ` · ${wind} km/h` : ""}</div><div>GDACS ${escapeHtml(c.alertLevel)} alert${c.severity ? ` · ${escapeHtml(c.severity)}` : ""}</div><a href="${c.link}" target="_blank" rel="noopener noreferrer">Track & impact report ↗</a></div>`;
 }
 
 function escapeHtml(s: string) {

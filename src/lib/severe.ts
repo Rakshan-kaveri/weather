@@ -203,6 +203,8 @@ export type TrackFeature = {
   kind: "past" | "forecast" | "point" | "area";
   level?: "Green" | "Orange" | "Red" | "cone";
   label?: string;
+  windKmh?: number;
+  time?: string;
   // GeoJSON geometry, coordinates rounded
   geometry: { type: string; coordinates: unknown };
 };
@@ -238,6 +240,8 @@ export async function cycloneTrack(eventId: string, episodeId: string | null): P
           kind: "point",
           level: /red/i.test(cls) ? "Red" : /orange/i.test(cls) ? "Orange" : isForecast ? "cone" : undefined,
           label: [when ? String(when).replace("T", " ").slice(0, 16) : "", wind ? `${Math.round(Number(wind))} km/h` : ""].filter(Boolean).join(" · ") || undefined,
+          windKmh: wind != null && Number.isFinite(Number(wind)) ? Math.round(Number(wind)) : undefined,
+          time: when ? String(when) : undefined,
           geometry,
         });
       } else if (g.type.includes("LineString")) {
