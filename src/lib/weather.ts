@@ -119,6 +119,33 @@ export function clampCoords(lat: number, lon: number) {
   return { lat: round(lat), lon: round(lon) };
 }
 
+/**
+ * The API's daily weather_code is the *most severe* hour of the day, so a single 0.2 mm shower at 3 AM
+ * turns a sunny day into "rain". Work out what the day actually looks like from its hourly data instead:
+ *  - not a rain day (< 1 mm total and at most one hour with measurable rain) → sky from daytime cloud cover
+ *  - light rain day (< 2.5 mm) → "slight showers" rather than "moderate/heavy rain"
+ *  - otherwise keep the API's code (real rain / thunderstorm days)
+ */
+export function representativeCode(day: DayPoint, hourly: HourPoint[]): number {
+  const hours = hourly.filter((h) => h.time.startsWith(day.date));
+  if (!hours.length) return day.weatherCode;
+  const wetHours = hours.filter((h) => h.precipitation >= 0.3).length;
+  const sum = hours.reduce((a, h) => a + h.precipitation, 0);
+  if (sum < 1 && wetHours <= 1) {
+    const daytime = hours.filter((h) => {
+      const hr = Number(h.time.slice(11, 13));
+      return hr >= 8 && hr <= 17;
+    });
+    const cloud = daytime.reduce((a, h) => a + h.cloudCover, 0) / Math.max(1, daytime.length);
+    const fog = daytime.filter((h) => h.weatherCode === 45 || h.weatherCode === 48).length >= 4;
+    if (fog) return 45;
+    return cloud < 20 ? 0 : cloud < 50 ? 1 : cloud < 80 ? 2 : 3;
+  }
+  if (sum < 2.5 && day.weatherCode >= 51 && day.weatherCode < 95) return 80;
+  if (day.weatherCode >= 95 && wetHours < 2) return 80; // isolated cell, not a stormy day
+  return day.weatherCode;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export async function getForecast(latIn: number, lonIn: number): Promise<Forecast> {
   const { lat, lon } = clampCoords(latIn, lonIn);
@@ -216,6 +243,7 @@ export async function getForecast(latIn: number, lonIn: number): Promise<Forecas
       et0: d.et0_fao_evapotranspiration?.[i] ?? null,
       sunshineHours: d.sunshine_duration?.[i] != null ? d.sunshine_duration[i] / 3600 : null,
     }));
+    for (const day of daily) day.weatherCode = representativeCode(day, hourly);
     const c = j.current;
     return {
       lat: j.latitude,
