@@ -27,7 +27,7 @@ export default function PrivacyPage() {
         <section>
           <h2 className="mb-1 font-semibold text-fg">Services we use</h2>
           <p>
-            Forecasts: Open-Meteo. Maps &amp; imagery: Esri, CARTO/OpenStreetMap, NASA GIBS, RainViewer. Email delivery: Resend. SMS delivery:
+            Forecasts: Open-Meteo. Maps &amp; imagery: Esri, NASA GIBS, RainViewer. Email delivery: Resend. SMS delivery:
             textbee. Sign-in: Google.
           </p>
         </section>

@@ -70,7 +70,7 @@ export default function MapExplorer() {
       center: hasQuery ? [qlat, qlon] : INDIA,
       zoom: hasQuery ? 8 : 5,
       minZoom: 3,
-      maxZoom: 12,
+      maxZoom: 15,
       zoomControl: false,
       worldCopyJump: true,
       maxBounds: [
@@ -83,7 +83,7 @@ export default function MapExplorer() {
 
     // Base imagery
     L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-      maxZoom: 12,
+      maxZoom: 15,
       attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
     }).addTo(map);
 
@@ -106,11 +106,11 @@ export default function MapExplorer() {
     // Labels & borders on top of everything
     map.createPane("labels").style.zIndex = "450";
     map.getPane("labels")!.style.pointerEvents = "none";
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png", {
+    // Borders and place names (Esri reference layer, no API key needed)
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
       pane: "labels",
-      subdomains: "abcd",
-      maxZoom: 12,
-      attribution: "© OpenStreetMap contributors © CARTO",
+      maxZoom: 15,
+      attribution: "Labels © Esri",
     }).addTo(map);
 
     map.on("click", (e: L.LeafletMouseEvent) => setSelected({ lat: e.latlng.lat, lon: e.latlng.lng }));
@@ -181,12 +181,12 @@ export default function MapExplorer() {
               version: "1.3.0",
               opacity: 0,
               maxNativeZoom: sat.maxNativeZoom,
-              maxZoom: 12,
+              maxZoom: 15,
               attribution: sat.attribution,
               ...(time ? { time } : {}),
             } as L.WMSOptions)
             .addTo(map)
-        : L.tileLayer(sat.url, { pane: "sat", opacity: 0, maxNativeZoom: sat.maxNativeZoom, maxZoom: 12, attribution: sat.attribution, time } as L.TileLayerOptions).addTo(map),
+        : L.tileLayer(sat.url, { pane: "sat", opacity: 0, maxNativeZoom: sat.maxNativeZoom, maxZoom: 15, attribution: sat.attribution, time } as L.TileLayerOptions).addTo(map),
     );
     setSatIdx(sat.frames.length - 1);
     if (sat.frames.length > 1) setPlaying(true);
@@ -434,7 +434,7 @@ export default function MapExplorer() {
     radarLayers.current = [];
     if (layer !== "radar") return;
     radarLayers.current = radar.map((f) =>
-      L.tileLayer(f.url, { pane: "radar", opacity: 0, maxNativeZoom: 7, maxZoom: 12, attribution: "Radar © RainViewer" }).addTo(map),
+      L.tileLayer(f.url, { pane: "radar", opacity: 0, maxNativeZoom: 7, maxZoom: 15, attribution: "Radar © RainViewer" }).addTo(map),
     );
   }, [layer, radar]);
 

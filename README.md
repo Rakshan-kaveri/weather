@@ -39,7 +39,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 | Auth | NextAuth (Auth.js) with Google OAuth 2.0 |
 | Email | Resend (SMTP fallback supported), signed delivery webhooks |
 | SMS | textbee.dev Android SMS gateway, signed delivery webhooks |
-| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), RainViewer, Esri, CARTO/OpenStreetMap |
+| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), RainViewer, Esri |
 | Hosting | Google Cloud VM + PM2 + Cloudflare Tunnel |
 
 ## Architecture
@@ -107,5 +107,5 @@ Step-by-step guide for Google Cloud + Cloudflare Tunnel: **[docs/DEPLOYMENT.md](
 ## Credits
 
 Forecast data © [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) · Satellite imagery © EUMETSAT, NASA EOSDIS GIBS,
-JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Radar: RainViewer · Map labels © OpenStreetMap contributors © CARTO.
+JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Radar: RainViewer · Map labels © Esri.
 Warnings are automated guidance; always follow official IMD and local authority advisories.
