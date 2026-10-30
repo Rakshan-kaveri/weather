@@ -225,7 +225,7 @@ export default function MapExplorer() {
     satStack.current = new FrameStack(
       map,
       (i) => {
-        const time = sat.frames[i];
+        const time = sat.frames[Math.min(i, sat.frames.length - 1)] || sat.frames[sat.frames.length - 1] || "";
         return sat.kind === "wms"
           ? L.tileLayer.wms(sat.url, {
               pane: "sat",
@@ -245,7 +245,7 @@ export default function MapExplorer() {
               maxZoom: 15,
               updateWhenZooming: false,
               attribution: sat.attribution,
-              time,
+              time: time || new Date(Date.now() - 86400_000).toISOString().slice(0, 10),
             } as L.TileLayerOptions);
       },
       sat.opacity,
@@ -924,13 +924,20 @@ class FrameStack {
   ) {}
   private ensure(i: number) {
     if (this.layers.has(i)) return;
-    const l = this.make(i);
-    l.setOpacity(0);
-    l.addTo(this.map);
-    this.layers.set(i, l);
+    try {
+      const l = this.make(i);
+      l.setOpacity(0);
+      l.addTo(this.map);
+      this.layers.set(i, l);
+    } catch (e) {
+      // one broken frame must never take the whole map down
+      console.warn("frame layer failed", e);
+    }
   }
-  show(i: number, count: number) {
+  show(iIn: number, count: number) {
     if (count <= 0) return;
+    // the index can belong to the previous feed (e.g. frame 8 of 8, then a 1-frame feed is chosen)
+    const i = ((iIn % count) + count) % count;
     this.ensure(i);
     if (count > 1) this.ensure((i + 1) % count);
     this.layers.forEach((l, k) => l.setOpacity(k === i ? this.opacity : 0));
