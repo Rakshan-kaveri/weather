@@ -12,12 +12,10 @@ export function Dashboard({
   signedIn,
   firstName,
   places,
-  zoomEarth = false,
 }: {
   signedIn: boolean;
   firstName: string | null;
   places: SavedPlace[];
-  zoomEarth?: boolean;
 }) {
   const defaultPlace = places.find((p) => p.isDefault) ?? places[0] ?? null;
   const [loc, setLoc] = useState<Loc | null>(defaultPlace);
@@ -95,25 +93,6 @@ export function Dashboard({
             {firstName ? `, ${firstName}` : ""}
           </p>
           <h1 className="h1">Your weather</h1>
-          {zoomEarth && (
-            <nav
-              className="mt-3 inline-flex rounded-lg border border-ink-700 bg-ink-900 p-1 text-sm"
-              aria-label="Dashboard views"
-            >
-              <span
-                className="rounded-md bg-accent px-3 py-1.5 font-medium text-white"
-                aria-current="page"
-              >
-                Forecast
-              </span>
-              <Link
-                href="/satellite-view"
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-fg-muted hover:text-fg"
-              >
-                <Icon name="satellite" size={14} /> Satellite View
-              </Link>
-            </nav>
-          )}
         </div>
         <div className="w-full sm:w-80">
           <SearchBox

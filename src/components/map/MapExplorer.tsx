@@ -104,7 +104,7 @@ export default function MapExplorer() {
       "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
       { pane: "night", maxNativeZoom: 8, maxZoom: 15, attribution: "Night lights: NASA Black Marble" },
     );
-    // Day/night shading (like the night side on Zoom Earth), between the base imagery and the clouds
+    // Day/night shading from the real sun position, between the base imagery and the clouds
     const shadePane = map.createPane("shade");
     shadePane.style.zIndex = "245";
     shadePane.style.pointerEvents = "none";
