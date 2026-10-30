@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Icon } from "../Icon";
@@ -10,8 +11,12 @@ import { api, toast } from "../Toast";
 import { aqiLevel, compass, describe, uvLevel } from "@/lib/codes";
 import { clock, dateLabel, dayName, hourLabel, rainWindow, shortDate, temp, wind } from "@/lib/units";
 import type { AirQuality, Forecast, HistoryDay } from "@/lib/weather";
-import { HourlyChart, HistoryChart } from "./Charts";
 import { SevereBanner } from "../SevereBanner";
+
+// The chart library is the heaviest part of this page; load it after the forecast itself is on screen.
+const chartFallback = () => <div className="mt-4 h-56 w-full animate-pulse rounded-xl bg-ink-800/40" />;
+const HourlyChart = dynamic(() => import("./Charts").then((m) => m.HourlyChart), { ssr: false, loading: chartFallback });
+const HistoryChart = dynamic(() => import("./Charts").then((m) => m.HistoryChart), { ssr: false, loading: chartFallback });
 
 export type Loc = { lat: number; lon: number; name: string; region?: string | null; country?: string | null };
 

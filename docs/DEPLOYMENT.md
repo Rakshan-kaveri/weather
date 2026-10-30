@@ -181,6 +181,13 @@ curl localhost:3000/api/health   # {"ok":true,"db":"up"}
 cd ~/weather && git pull && npm install && npx prisma db push && npm run build && pm2 restart all
 ```
 
+District and taluk boundaries are split into small per-area files under `data/boundaries/` the first time the
+server starts (in a separate background process, so the web server's memory stays low). To build them by hand:
+
+```bash
+node scripts/build-boundaries.mjs
+```
+
 ## Live satellite & severe-weather data
 
 No keys or sign-ups needed. The server reads:

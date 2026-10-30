@@ -645,7 +645,10 @@ export default function MapExplorer() {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const { u, v } = windComponents(grid, Math.min(timeIdx, grid.times.length - 1));
-    const count = Math.round(Math.min(1800, (size.x * size.y) / 800));
+    // Phones and low-core devices get fewer particles and ~30 fps, which looks the same but keeps panning smooth.
+    const lowEnd = (navigator.hardwareConcurrency || 8) <= 4 || size.x < 700;
+    const count = Math.round(Math.min(1800, (size.x * size.y) / 800) * (lowEnd ? 0.6 : 1));
+    let odd = false;
     // Web Mercator: longitude depends only on x, latitude only on y, so precompute both once.
     const lonAt = new Float64Array(size.x + 1);
     const latAt = new Float64Array(size.y + 1);
@@ -656,6 +659,10 @@ export default function MapExplorer() {
     const k = 0.05;
 
     const frame = () => {
+      if (lowEnd && (odd = !odd)) {
+        rafRef.current = requestAnimationFrame(frame);
+        return;
+      }
       ctx.globalCompositeOperation = "destination-in";
       ctx.fillStyle = "rgba(0,0,0,0.92)";
       ctx.fillRect(0, 0, size.x, size.y);
