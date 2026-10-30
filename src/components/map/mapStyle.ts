@@ -6,12 +6,11 @@ import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
  */
 export const OFM = "https://tiles.openfreemap.org";
 export const ESRI_IMAGERY = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-export const NIGHT_LIGHTS =
-  "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png";
 
 /** Web-Mercator latitude limit (image sources must stay inside it). */
 export const MERC_MAX = 85.0511;
-export const EMPTY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/** Fully transparent 1×1 pixel, used until a generated image is ready. */
+export const EMPTY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4XmNgYGBgAAAABQABGWkDzwAAAABJRU5ErkJggg==";
 export const WORLD: [[number, number], [number, number], [number, number], [number, number]] = [
   [-180, MERC_MAX],
   [180, MERC_MAX],
@@ -42,7 +41,6 @@ export function baseStyle(): StyleSpecification {
         maxzoom: 18,
         attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
       },
-      night: { type: "raster", tiles: [NIGHT_LIGHTS], tileSize: 256, maxzoom: 8, attribution: "Night lights: NASA Black Marble" },
       omt: { type: "vector", url: `${OFM}/planet`, attribution: '<a href="https://openfreemap.org">OpenFreeMap</a> © OpenStreetMap contributors' },
       shade: { type: "image", url: EMPTY_PNG, coordinates: WORLD },
       heat: { type: "image", url: EMPTY_PNG, coordinates: WORLD },
@@ -56,7 +54,6 @@ export function baseStyle(): StyleSpecification {
     layers: [
       { id: "bg", type: "background", paint: { "background-color": "#04060b" } },
       { id: "imagery", type: "raster", source: "imagery", paint: { "raster-fade-duration": 150, "raster-saturation": -0.1, "raster-brightness-max": 0.92 } },
-      { id: "night", type: "raster", source: "night", layout: { visibility: "none" }, paint: { "raster-fade-duration": 0 } },
       { id: "shade", type: "raster", source: "shade", paint: { "raster-fade-duration": 0, "raster-resampling": "linear" } },
       slot(SLOT_SAT),
       { id: "heat", type: "raster", source: "heat", paint: { "raster-fade-duration": 0, "raster-resampling": "linear", "raster-opacity": 0.6 } },

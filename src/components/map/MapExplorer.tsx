@@ -21,6 +21,42 @@ type TrackFeature = { kind: "past" | "forecast" | "point" | "area"; level?: stri
 type FC = GeoJSON.FeatureCollection;
 
 const INDIA: [number, number] = [79, 21.5]; // lon, lat
+const CLOUD_PROTOCOL = "clouds";
+
+/**
+ * Infrared satellite images are greyscale: bright = cold cloud tops, dark = warm ground and sea. Drawing them
+ * as white with alpha = brightness is the same as a "screen" blend, and cutting off the dark end removes the
+ * ground completely — leaving only the clouds floating over the map.
+ */
+let cloudProtocolReady = false;
+function registerCloudProtocol() {
+  if (cloudProtocolReady) return;
+  cloudProtocolReady = true;
+  maplibregl.addProtocol(CLOUD_PROTOCOL, async (params, abort) => {
+    const url = params.url.slice(CLOUD_PROTOCOL.length + 3);
+    const res = await fetch(url, { signal: abort.signal });
+    if (!res.ok) throw new Error(`cloud tile ${res.status}`);
+    const bitmap = await createImageBitmap(await res.blob());
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = img.data;
+    const LO = 72; // below this brightness: ground/sea → fully transparent
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      const t = Math.max(0, Math.min(1, (v - LO) / (255 - LO)));
+      d[i] = 255;
+      d[i + 1] = 255;
+      d[i + 2] = 255;
+      d[i + 3] = Math.round(d[i + 3] * Math.pow(t, 0.85));
+    }
+    ctx.putImageData(img, 0, 0);
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    return { data: await blob.arrayBuffer() };
+  });
+}
 const LAYER_KEY = "skycast:layer";
 const GLOBE_KEY = "skycast:globe";
 
@@ -73,6 +109,7 @@ export default function MapExplorer() {
       /* storage blocked */
     }
 
+    registerCloudProtocol();
     const map = new maplibregl.Map({
       container: mapEl.current,
       style: baseStyle(),
@@ -90,6 +127,7 @@ export default function MapExplorer() {
     map.keyboard.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     mapRef.current = map;
+    (window as unknown as { __skycastMap?: MLMap }).__skycastMap = map; // handy for debugging from the console
 
     map.on("load", () => {
       setReady(true);
@@ -175,7 +213,11 @@ export default function MapExplorer() {
     satFrames.current = null;
     if (layer !== "satellite" || !sat || !sat.frames.length) return;
     const ir = sat.id !== "truecolor";
-    satFrames.current = new FrameStack(map, "sat", SLOT_SAT, sat.frames.length, sat.maxNativeZoom, ir ? 0.9 : sat.opacity, (i) => satTileUrl(sat, i), ir ? 0.25 : 0);
+    // Infrared frames are turned into see-through cloud layers (warm dark ground → transparent) in the browser,
+    // so the day imagery and the real day/night shading show underneath, like Zoom Earth.
+    satFrames.current = new FrameStack(map, "sat", SLOT_SAT, sat.frames.length, sat.maxNativeZoom, ir ? 1 : sat.opacity, (i) =>
+      ir ? `${CLOUD_PROTOCOL}://${satTileUrl(sat, i)}` : satTileUrl(sat, i),
+    );
     const last = sat.frames.length - 1;
     setSatIdx(last);
     satFrames.current.show(last);
@@ -187,14 +229,6 @@ export default function MapExplorer() {
     satFrames.current?.show(satIdx);
   }, [satIdx, sat]);
 
-  // Infrared clouds sit on the night-lights base (city lights show through gaps); no extra night shading there.
-  const irMode = layer === "satellite" && !!sat && sat.id !== "truecolor";
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-    map.setLayoutProperty("night", "visibility", irMode ? "visible" : "none");
-    map.setLayoutProperty("shade", "visibility", irMode ? "none" : "visible");
-  }, [irMode, ready]);
 
   /* ─── Day / night shading (GPU image, follows the map perfectly) ─── */
   useEffect(() => {
@@ -780,7 +814,7 @@ function satTileUrl(sat: SatSource, i: number) {
   if (sat.kind === "xyz") return sat.url.replace("{time}", encodeURIComponent(time));
   // EUMETSAT tiles come through our server (they need CORS headers for WebGL); MapLibre fills in the bbox
   const q = new URLSearchParams({ layer: sat.layer ?? "", time });
-  return `${window.location.origin}/api/sat-tile?${q}&bbox={bbox-epsg-3857}`;
+  return `${window.location.origin}/api/sat-tile/tile.png?${q}&bbox={bbox-epsg-3857}`;
 }
 
 /**
@@ -797,7 +831,6 @@ class FrameStack {
     private maxzoom: number,
     private opacity: number,
     private url: (i: number) => string,
-    private contrast = 0,
   ) {}
   private id(i: number) {
     return `${this.prefix}-${i}`;
@@ -807,7 +840,7 @@ class FrameStack {
     try {
       this.map.addSource(this.id(i), { type: "raster", tiles: [this.url(i)], tileSize: 256, maxzoom: this.maxzoom });
       this.map.addLayer(
-        { id: this.id(i), type: "raster", source: this.id(i), paint: { "raster-opacity": 0, "raster-fade-duration": 0, "raster-contrast": this.contrast } },
+        { id: this.id(i), type: "raster", source: this.id(i), paint: { "raster-opacity": 0, "raster-fade-duration": 150 } },
         this.before,
       );
       this.made.add(i);

@@ -38,7 +38,7 @@ whether they subscribed to reports, and whether each report was actually deliver
 | Auth | NextAuth (Auth.js) with Google OAuth 2.0 |
 | Email | Resend (SMTP fallback supported), signed delivery webhooks |
 | SMS | textbee.dev Android SMS gateway, signed delivery webhooks |
-| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), geoBoundaries (district/taluk boundaries), NASA Black Marble (night lights), RainViewer, Esri imagery, OpenFreeMap (OpenStreetMap vector borders & labels) |
+| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), geoBoundaries (district/taluk boundaries), RainViewer, Esri imagery, OpenFreeMap (OpenStreetMap vector borders & labels) |
 | Hosting | Google Cloud VM + PM2 + Cloudflare Tunnel |
 
 ## Architecture

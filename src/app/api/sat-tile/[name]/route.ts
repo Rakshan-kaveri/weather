@@ -4,8 +4,13 @@ export const dynamic = "force-dynamic";
 
 const EUMETVIEW = "https://view.eumetsat.int/geoserver/wms";
 
+// Recently served tiles (~30 KB each): many visitors look at the same frames, so keep a few hundred in memory.
+const cache = new Map<string, { body: ArrayBuffer; type: string }>();
+const CACHE_MAX = 600;
+
 /**
- * GET /api/sat-tile?layer=&time=&bbox=  → one 256×256 EUMETSAT (Meteosat) cloud tile.
+ * GET /api/sat-tile/tile.png?layer=&time=&bbox=  (the ".png" path lets Cloudflare cache it at the edge)
+ *  → one 256×256 EUMETSAT (Meteosat) cloud tile.
  * The WebGL map can only draw images served with CORS headers, so EUMETSAT's open WMS tiles are passed
  * through here. Frames for a given time never change, so browsers and Cloudflare may cache them for a day.
  */
@@ -33,11 +38,17 @@ export const GET = handler(async (req: Request) => {
     bbox: bbox.join(","),
     time,
   });
-  const res = await fetch(`${EUMETVIEW}?${q}`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
-  if (!res) throw new HttpError(502, "tile unavailable");
-  const type = res.headers.get("content-type") ?? "";
-  if (!res.ok || !type.startsWith("image/")) throw new HttpError(502, "tile unavailable");
-  return new Response(res.body, {
-    headers: { "Content-Type": type, "Cache-Control": "public, max-age=86400, immutable", "Access-Control-Allow-Origin": "*" },
+  const key = q.toString();
+  let hit = cache.get(key);
+  if (!hit) {
+    const res = await fetch(`${EUMETVIEW}?${q}`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
+    const type = res?.headers.get("content-type") ?? "";
+    if (!res || !res.ok || !type.startsWith("image/")) throw new HttpError(502, "tile unavailable");
+    hit = { body: await res.arrayBuffer(), type };
+    cache.set(key, hit);
+    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  }
+  return new Response(hit.body, {
+    headers: { "Content-Type": hit.type, "Cache-Control": "public, max-age=86400, immutable", "Access-Control-Allow-Origin": "*" },
   });
 });
