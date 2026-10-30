@@ -7,12 +7,12 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { timeAgo } from "@/lib/time";
 
-const NAV: { href: string; label: string; icon: IconName; auth?: boolean }[] = [
+const NAV: { href: string; label: string; icon: IconName; auth?: boolean; zoomEarth?: boolean }[] = [
   { href: "/", label: "Map", icon: "layers" },
   { href: "/dashboard", label: "My weather", icon: "sun" },
   { href: "/places", label: "Places", icon: "pin", auth: true },
   { href: "/compare", label: "Compare", icon: "compare" },
-  { href: "/satellite-view", label: "Satellite View", icon: "satellite" },
+  { href: "/satellite-view", label: "Satellite View", icon: "satellite", zoomEarth: true },
   { href: "/subscriptions", label: "Reports", icon: "mail", auth: true },
   { href: "/alerts", label: "Alerts", icon: "bell", auth: true },
 ];
@@ -37,7 +37,7 @@ export function Logo({ className = "" }: { className?: string }) {
   );
 }
 
-export function Header() {
+export function Header({ zoomEarth = false }: { zoomEarth?: boolean }) {
   const pathname = usePathname();
   const { data: session, status } = useSession();
   const [menu, setMenu] = useState(false);
@@ -66,7 +66,7 @@ export function Header() {
       >
         <Logo className={onMap ? "text-white" : ""} />
         <nav className="ml-4 hidden items-center gap-1 lg:flex" aria-label="Main">
-          {NAV.filter((n) => !n.auth || signedIn).map((n) => {
+          {NAV.filter((n) => (!n.auth || signedIn) && (!n.zoomEarth || zoomEarth)).map((n) => {
             const active = n.href === "/" ? pathname === "/" : pathname.startsWith(n.href);
             return (
               <Link
@@ -152,7 +152,7 @@ export function Header() {
       </div>
       {mobile && (
         <nav className="glass pointer-events-auto mx-3 mt-2 grid gap-1 rounded-2xl p-2 lg:hidden">
-          {NAV.filter((n) => !n.auth || signedIn).map((n) => (
+          {NAV.filter((n) => (!n.auth || signedIn) && (!n.zoomEarth || zoomEarth)).map((n) => (
             <Link key={n.href} href={n.href} className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-white/85 hover:bg-white/10">
               <Icon name={n.icon} size={18} /> {n.label}
             </Link>

@@ -23,24 +23,34 @@ export function PointPanel({ point, onClose }: { point: Point; onClose: () => vo
   );
   const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     setData(null);
     setError(false);
     const ctrl = new AbortController();
-    fetch(`/api/weather?lat=${point.lat}&lon=${point.lon}`, { signal: ctrl.signal })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setData)
-      .catch((e) => e?.name !== "AbortError" && setError(true));
+    const url = `/api/weather?lat=${point.lat.toFixed(3)}&lon=${point.lon.toFixed(3)}`;
+    const load = (tries: number): Promise<void> =>
+      fetch(url, { signal: ctrl.signal })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setData)
+        .catch((e) => {
+          if (e?.name === "AbortError") return;
+          if (tries > 0) return new Promise<void>((r) => setTimeout(r, 1200)).then(() => (ctrl.signal.aborted ? undefined : load(tries - 1)));
+          setError(true);
+        });
+    void load(2);
     if (!point.name) {
       setPlace(null);
-      fetch(`/api/reverse?lat=${point.lat}&lon=${point.lon}`, { signal: ctrl.signal })
-        .then((r) => r.json())
-        .then(setPlace)
-        .catch(() => {});
+      fetch(`/api/reverse?lat=${point.lat.toFixed(3)}&lon=${point.lon.toFixed(3)}`, { signal: ctrl.signal })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((p) => setPlace(p?.name ? p : null))
+        .catch((e) => {
+          if (e?.name !== "AbortError") setPlace({ name: `${point.lat.toFixed(2)}°, ${point.lon.toFixed(2)}°` });
+        });
     } else setPlace({ name: point.name, region: point.region, country: point.country });
     return () => ctrl.abort();
-  }, [point.lat, point.lon, point.name, point.region, point.country]);
+  }, [point.lat, point.lon, point.name, point.region, point.country, attempt]);
 
   const name = place?.name ?? "Loading…";
   const c = data?.forecast.current;
@@ -79,7 +89,14 @@ export function PointPanel({ point, onClose }: { point: Point; onClose: () => vo
         </button>
       </div>
 
-      {error && <p className="mt-4 text-sm text-[#ffb4b4]">Couldn&apos;t load weather for this spot. Try again in a moment.</p>}
+      {error && (
+        <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[#ffb4b4]">
+          <span>Couldn&apos;t load weather for this spot.</span>
+          <button className="rounded-lg bg-white/10 px-3 py-1 text-white hover:bg-white/20" onClick={() => setAttempt((a) => a + 1)}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {!data && !error && (
         <div className="mt-4 space-y-3">

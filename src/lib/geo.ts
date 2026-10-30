@@ -7,8 +7,9 @@ export type PlaceName = { name: string; region?: string; country?: string; count
 export async function reverseGeocode(lat: number, lon: number): Promise<PlaceName> {
   const la = Math.round(lat * 100) / 100;
   const lo = Math.round(lon * 100) / 100;
+  // Failures are not cached (the fallback is returned outside the cache), so the next click tries again.
   return cached(`rev:${la}:${lo}`, 7 * 86400, async () => {
-    try {
+    {
       const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&addressdetails=1&lat=${la}&lon=${lo}`;
       const res = await fetch(url, {
         headers: {
@@ -24,10 +25,8 @@ export async function reverseGeocode(lat: number, lon: number): Promise<PlaceNam
       const name =
         a.city || a.town || a.village || a.municipality || a.county || a.state_district || a.state || j.name || "Unknown place";
       return { name, region: a.state, country: a.country, countryCode: a.country_code?.toUpperCase() };
-    } catch {
-      return { name: `${la.toFixed(2)}, ${lo.toFixed(2)}` };
     }
-  });
+  }).catch(() => ({ name: `${la.toFixed(2)}°, ${lo.toFixed(2)}°` }));
 }
 
 export function clientIp(headers: Headers): string | null {

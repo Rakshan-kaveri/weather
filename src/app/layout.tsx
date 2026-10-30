@@ -4,6 +4,7 @@ import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { Header } from "@/components/Header";
+import { zoomEarthEmbedEnabled } from "@/lib/zoomEarth";
 import { PresenceBeacon } from "@/components/PresenceBeacon";
 import { Toaster } from "@/components/Toast";
 import { currentUser } from "@/lib/session";
@@ -44,7 +45,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           Skip to content
         </a>
         <Providers initialPrefs={prefs} signedIn={!!user}>
-          <Header />
+          <Header zoomEarth={zoomEarthEmbedEnabled()} />
           <main id="main">{children}</main>
           {user && <PresenceBeacon />}
           <Toaster />

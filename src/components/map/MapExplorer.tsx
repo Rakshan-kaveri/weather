@@ -32,6 +32,8 @@ export default function MapExplorer() {
   const trackLayer = useRef<L.LayerGroup | null>(null);
   const adminLayer = useRef<L.LayerGroup | null>(null);
   const nightLayer = useRef<L.TileLayer | null>(null);
+  const shadeRef = useRef<HTMLCanvasElement | null>(null);
+  const [sunTick, setSunTick] = useState(0);
   const adminKey = useRef("");
   const radarStack = useRef<FrameStack | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -102,6 +104,11 @@ export default function MapExplorer() {
       "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
       { pane: "night", maxNativeZoom: 8, maxZoom: 15, attribution: "Night lights: NASA Black Marble" },
     );
+    // Day/night shading (like the night side on Zoom Earth), between the base imagery and the clouds
+    const shadePane = map.createPane("shade");
+    shadePane.style.zIndex = "245";
+    shadePane.style.pointerEvents = "none";
+    shadeRef.current = L.DomUtil.create("canvas", "", shadePane) as HTMLCanvasElement;
     map.createPane("sat").style.zIndex = "250";
     map.createPane("tracks").style.zIndex = "610";
     trackLayer.current = L.layerGroup([], { pane: "tracks" }).addTo(map);
@@ -134,10 +141,18 @@ export default function MapExplorer() {
       attribution: "Labels © Esri",
     }).addTo(map);
 
-    map.on("click", (e: L.LeafletMouseEvent) => setSelected({ lat: e.latlng.lat, lon: e.latlng.lng }));
+    // Single click opens a place; a double click is left to zoom the map (otherwise both fire and race).
+    let clickTimer: ReturnType<typeof setTimeout> | undefined;
+    map.on("click", (e: L.LeafletMouseEvent) => {
+      clearTimeout(clickTimer);
+      const p = e.latlng.wrap();
+      clickTimer = setTimeout(() => setSelected({ lat: p.lat, lon: p.lng }), 230);
+    });
+    map.on("dblclick", () => clearTimeout(clickTimer));
     map.on("zoomstart", () => {
       if (heatRef.current) heatRef.current.style.visibility = "hidden";
       if (flowRef.current) flowRef.current.style.visibility = "hidden";
+      if (shadeRef.current) shadeRef.current.style.visibility = "hidden";
     });
     // Blend modes and CSS filters are costly to repaint every animation frame, so pause them during pan/zoom.
     const sat = map.getPane("sat")!;
@@ -469,6 +484,64 @@ export default function MapExplorer() {
     const t = setTimeout(loadGrid, 600);
     return () => clearTimeout(t);
   }, [viewTick, def.gridVar, loadGrid]);
+
+  /* ─── Day / night shading ─────────────────────────────── */
+  useEffect(() => {
+    const t = setInterval(() => setSunTick((n) => n + 1), 5 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const canvas = shadeRef.current;
+    if (!map || !canvas) return;
+    // Infrared mode already sits on the night-lights base, so no extra shading there.
+    const ir = layer === "satellite" && !!sat && sat.id !== "truecolor";
+    if (ir) {
+      canvas.style.visibility = "hidden";
+      return;
+    }
+    const size = map.getSize();
+    const pad = { x: Math.round(size.x / 2), y: Math.round(size.y / 2) }; // extra margin so panning doesn't reveal edges
+    const SCALE = 6; // compute at 1/6 resolution; the browser smooths it when stretching → soft twilight edge
+    const W = Math.ceil((size.x + 2 * pad.x) / SCALE);
+    const H = Math.ceil((size.y + 2 * pad.y) / SCALE);
+    canvas.width = W;
+    canvas.height = H;
+    canvas.style.width = `${W * SCALE}px`;
+    canvas.style.height = `${H * SCALE}px`;
+    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([-pad.x, -pad.y]));
+
+    const sun = subsolarPoint(new Date());
+    const rad = Math.PI / 180;
+    const sinD = Math.sin(sun.lat * rad);
+    const cosD = Math.cos(sun.lat * rad);
+    // Web Mercator: longitude depends only on x, latitude only on y
+    const lons = Array.from({ length: W }, (_, x) => map.containerPointToLatLng([x * SCALE - pad.x, 0]).lng);
+    const lats = Array.from({ length: H }, (_, y) => map.containerPointToLatLng([0, y * SCALE - pad.y]).lat);
+    const cosH = lons.map((lng) => Math.cos((lng - sun.lon) * rad));
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(W, H);
+    const MAX = 0.62;
+    for (let y = 0; y < H; y++) {
+      const la = lats[y] * rad;
+      const a = Math.sin(la) * sinD;
+      const b = Math.cos(la) * cosD;
+      for (let x = 0; x < W; x++) {
+        const elev = Math.asin(Math.max(-1, Math.min(1, a + b * cosH[x]))) / rad; // sun elevation in degrees
+        // full daylight above +2°, deepening through civil/nautical twilight, full night below −12°
+        const t = Math.max(0, Math.min(1, (2 - elev) / 14));
+        const alpha = MAX * t * t * (3 - 2 * t);
+        const i = (y * W + x) * 4;
+        img.data[i] = 3;
+        img.data[i + 1] = 7;
+        img.data[i + 2] = 20;
+        img.data[i + 3] = Math.round(alpha * 255);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    canvas.style.visibility = "visible";
+  }, [viewTick, sunTick, layer, sat]);
 
   /* ─── Heat map + value labels ─────────────────────────── */
   useEffect(() => {
@@ -883,6 +956,21 @@ function imdClass(windKmh?: number | null): ImdClass | null {
   let cls: ImdClass | null = null;
   for (const c of IMD_CLASSES) if (windKmh >= c.min) cls = c;
   return cls ?? { min: 0, name: "Low pressure area", short: "L", color: "#a9b4c6" };
+}
+
+/** Point on Earth where the sun is directly overhead (low-precision solar ephemeris, good to ~0.1°). */
+function subsolarPoint(date: Date) {
+  const d = date.getTime() / 86400000 - 10957.5; // days since J2000.0
+  const rad = Math.PI / 180;
+  const g = (357.529 + 0.98560028 * d) * rad;
+  const q = 280.459 + 0.98564736 * d;
+  const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad;
+  const e = (23.439 - 0.00000036 * d) * rad;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)) / rad;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L)) / rad;
+  const gmst = 280.46061837 + 360.98564736629 * d;
+  const lon = ((((ra - gmst + 180) % 360) + 360) % 360) - 180;
+  return { lat: dec, lon };
 }
 
 /** Rounded forecast cone: convex hull of circles (radius in km) around each forecast position. */

@@ -97,22 +97,43 @@ export type GeoResult = {
   population?: number;
 };
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Weather API ${res.status}: ${body.slice(0, 200)}`);
+/**
+ * Open-Meteo's free tier allows ~600 calls/min, 5,000/hour and 10,000/day (a multi-point request counts once
+ * per point). When it answers 429 we back off for a while and only let the important requests (a single
+ * place's forecast) through, so the map's background heat-map never starves a user's click.
+ */
+let coolDownUntil = 0;
+export function upstreamBusy() {
+  return Date.now() < coolDownUntil;
+}
+
+async function getJson<T>(url: string, opts: { retries?: number } = {}): Promise<T> {
+  const retries = opts.retries ?? 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(12000),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const body = await res.text().catch(() => "");
+      if (res.status === 429) coolDownUntil = Date.now() + (/hour|daily/i.test(body) ? 10 * 60_000 : 60_000);
+      const err = new Error(`Weather API ${res.status}: ${body.slice(0, 200)}`);
+      if (res.status < 500 && res.status !== 429) throw Object.assign(err, { final: true });
+      throw err;
+    } catch (e) {
+      if ((e as { final?: boolean }).final || attempt >= retries) throw e;
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
   }
-  return res.json() as Promise<T>;
 }
 
 const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
 
-export function clampCoords(lat: number, lon: number) {
+export function clampCoords(lat: number, lonRaw: number) {
+  // the map repeats the world sideways, so a click can arrive as e.g. 434.7° — bring it back to −180…180
+  const lon = Number.isFinite(lonRaw) ? ((((lonRaw + 180) % 360) + 360) % 360) - 180 : lonRaw;
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     throw new Error("Invalid coordinates");
   }
@@ -379,17 +400,18 @@ export async function getGrid(west: number, south: number, east: number, north: 
   // Snap to a step that keeps the grid at ~10 x 8 points whatever the zoom level.
   const span = Math.max(east - west, north - south);
   const steps = [0.25, 0.5, 1, 2, 3, 4, 5, 8, 12];
-  const step = steps.find((s) => span / s <= 9) ?? 15;
+  const step = steps.find((s) => span / s <= 6) ?? 15;
   const w = Math.max(-180, Math.floor(west / step) * step - step);
   const e = Math.min(180, Math.ceil(east / step) * step + step);
   const s = Math.max(-85, Math.floor(south / step) * step - step);
   const n = Math.min(85, Math.ceil(north / step) * step + step);
-  const cols = Math.min(14, Math.round((e - w) / step) + 1);
-  const rows = Math.min(12, Math.round((n - s) / step) + 1);
+  const cols = Math.min(10, Math.round((e - w) / step) + 1);
+  const rows = Math.min(9, Math.round((n - s) / step) + 1);
   const dx = (e - w) / (cols - 1);
   const dy = (n - s) / (rows - 1);
 
-  return cached(`grid:${w}:${s}:${e}:${n}:${cols}:${rows}`, 1800, async () => {
+  return cached(`grid:${w}:${s}:${e}:${n}:${cols}:${rows}`, 3600, async () => {
+    if (upstreamBusy()) throw new Error("Weather API busy");
     const lats: number[] = [];
     const lons: number[] = [];
     for (let r = 0; r < rows; r++) {
@@ -410,7 +432,7 @@ export async function getGrid(west: number, south: number, east: number, north: 
         forecast_hours: "48",
         timezone: "GMT",
       });
-      chunks.push(getJson<any>(`${FORECAST}?${params}`).then((j) => (Array.isArray(j) ? j : [j])));
+      chunks.push(getJson<any>(`${FORECAST}?${params}`, { retries: 0 }).then((j) => (Array.isArray(j) ? j : [j])));
     }
     const results: any[] = (await Promise.all(chunks)).flat();
     const times: string[] = results[0].hourly.time.map((t: string) => t + ":00Z");
