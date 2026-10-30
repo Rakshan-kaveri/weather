@@ -103,31 +103,77 @@ body {
   }
 }
 
-/* Leaflet tweaks for the full-screen map */
-.leaflet-container {
-  background: #05070c !important;
-  font-family: inherit !important;
+/* MapLibre controls, dark to match the map */
+.maplibregl-map {
+  font-family: inherit;
+  background: #04060b;
 }
-.leaflet-control-attribution {
-  background: rgba(8, 11, 18, 0.6) !important;
-  color: #8a94a6 !important;
-  font-size: 10px !important;
-}
-.leaflet-control-attribution a {
-  color: #a9c6ff !important;
-}
-.leaflet-control-zoom {
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+.maplibregl-ctrl-group {
+  background: rgba(12, 16, 24, 0.86) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px !important;
+  box-shadow: none !important;
   overflow: hidden;
 }
-.leaflet-control-zoom a {
-  background: rgba(12, 16, 24, 0.86) !important;
-  color: #e8edf6 !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
-.leaflet-control-zoom a:hover {
+.maplibregl-ctrl-group button:not(:disabled):hover {
   background: rgba(30, 40, 60, 0.9) !important;
+}
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1) brightness(1.6);
+}
+.maplibregl-ctrl-attrib {
+  background: rgba(8, 11, 18, 0.6) !important;
+  color: #8a94a6;
+  font-size: 10px;
+}
+.maplibregl-ctrl-attrib a {
+  color: #a9c6ff;
+}
+.maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+}
+.maplibregl-ctrl-bottom-right {
+  bottom: 84px;
+}
+@media (max-width: 639px) {
+  .maplibregl-ctrl-bottom-right {
+    bottom: 96px;
+  }
+}
+.tc-popup .maplibregl-popup-content {
+  background: rgba(10, 14, 22, 0.94);
+  color: #e8edf6;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 9px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.tc-popup .maplibregl-popup-close-button {
+  color: #8a94a6;
+  font-size: 16px;
+  padding: 0 6px;
+}
+.tc-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.tc-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.tc-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: rgba(10, 14, 22, 0.94);
+}
+.tc-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.tc-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.tc-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: rgba(10, 14, 22, 0.94);
+}
+.tc-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: rgba(10, 14, 22, 0.94);
+}
+.tc-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: rgba(10, 14, 22, 0.94);
+}
+.tc-pop a {
+  color: #7cc4ff;
 }
 .pin-pulse {
   width: 14px;
@@ -191,7 +237,7 @@ input[type="range"].timeline::-moz-range-thumb {
 
 /* Phones pinch-zoom; hide the zoom buttons so they don't collide with the layer bar */
 @media (max-width: 639px) {
-  .leaflet-control-zoom {
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group {
     display: none;
   }
 }
@@ -222,19 +268,6 @@ input[type="range"].timeline::-moz-range-thumb {
   font-style: normal;
   color: var(--c);
 }
-.leaflet-tooltip.tc-tip {
-  background: rgba(10, 14, 22, 0.88);
-  border: 0;
-  color: #e8edf6;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 4px 7px;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-}
-.leaflet-tooltip.tc-tip::before {
-  display: none;
-}
 .tc-pop {
   font-size: 12px;
   line-height: 1.5;
@@ -244,43 +277,4 @@ input[type="range"].timeline::-moz-range-thumb {
   font-size: 13px;
 }
 
-/* District / taluk names on the map */
-.admin-label {
-  white-space: nowrap;
-  transform: translate(-50%, -50%);
-  width: max-content !important;
-  height: auto !important;
-  color: #fff;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.7);
-  pointer-events: none;
-}
-.admin-district {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.9;
-}
-.admin-taluk {
-  font-size: 9.5px;
-  font-weight: 500;
-  opacity: 0.75;
-}
 
-/* Date/time labels along a cyclone track */
-.leaflet-tooltip.tc-time {
-  background: rgba(10, 14, 22, 0.72);
-  border: 0;
-  box-shadow: none;
-  color: #e8edf6;
-  font: 500 10px/1.2 "Inter Variable", Inter, system-ui, sans-serif;
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-.leaflet-tooltip.tc-time::before {
-  display: none;
-}
-.leaflet-tooltip.tc-time-fc {
-  color: #c8cfdb;
-  font-style: italic;
-}

@@ -1,7 +1,7 @@
 "use client";
 
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MLMap, type MapMouseEvent } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../Icon";
 import { usePrefs } from "../Providers";
@@ -12,35 +12,34 @@ import { SearchBox, type PickedPlace } from "./SearchBox";
 import { PointPanel } from "./PointPanel";
 import { toast } from "../Toast";
 import type { SatSource } from "@/lib/satellite";
+import { MERC_MAX, SLOT_RADAR, SLOT_SAT, WORLD, baseStyle } from "./mapStyle";
 
 type RadarFrame = { time: number; url: string };
 type Selected = { lat: number; lon: number; name?: string; region?: string; country?: string };
-
-const INDIA: [number, number] = [21.5, 79];
-const LAYER_KEY = "skycast:layer";
-
 type Cyclone = { id: string; episodeId: string | null; name: string; alertLevel: "Green" | "Orange" | "Red"; lat: number; lon: number; severity: string; link: string };
+type TrackFeature = { kind: "past" | "forecast" | "point" | "area"; level?: string; label?: string; windKmh?: number; time?: string; geometry: GeoJSON.Geometry };
+type FC = GeoJSON.FeatureCollection;
+
+const INDIA: [number, number] = [79, 21.5]; // lon, lat
+const LAYER_KEY = "skycast:layer";
+const GLOBE_KEY = "skycast:globe";
 
 export default function MapExplorer() {
   const { prefs } = usePrefs();
   const mapEl = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const heatRef = useRef<HTMLCanvasElement | null>(null);
-  const flowRef = useRef<HTMLCanvasElement | null>(null);
-  const satStack = useRef<FrameStack | null>(null);
-  const cycloneLayer = useRef<L.LayerGroup | null>(null);
-  const trackLayer = useRef<L.LayerGroup | null>(null);
-  const adminLayer = useRef<L.LayerGroup | null>(null);
-  const nightLayer = useRef<L.TileLayer | null>(null);
-  const shadeRef = useRef<HTMLCanvasElement | null>(null);
-  const [sunTick, setSunTick] = useState(0);
-  const adminKey = useRef("");
-  const radarStack = useRef<FrameStack | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
-  const rafRef = useRef<number>(0);
+  const flowRef = useRef<HTMLCanvasElement>(null);
+  const mapRef = useRef<MLMap | null>(null);
+  const satFrames = useRef<FrameStack | null>(null);
+  const radarFrames = useRef<FrameStack | null>(null);
+  const markerRef = useRef<maplibregl.Marker | null>(null);
+  const tcMarkers = useRef<maplibregl.Marker[]>([]);
+  const rafRef = useRef(0);
   const gridKey = useRef("");
+  const adminKey = useRef("");
 
+  const [ready, setReady] = useState(false);
   const [layer, setLayer] = useState<LayerId>("wind");
+  const [globe, setGlobe] = useState(false);
   const [satSources, setSatSources] = useState<SatSource[]>([]);
   const [satId, setSatId] = useState<SatSource["id"] | null>(null);
   const [satIdx, setSatIdx] = useState(0);
@@ -53,6 +52,7 @@ export default function MapExplorer() {
   const [radarIdx, setRadarIdx] = useState(0);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [viewTick, setViewTick] = useState(0);
+  const [sunTick, setSunTick] = useState(0);
 
   const def = layerById(layer);
 
@@ -68,107 +68,48 @@ export default function MapExplorer() {
       const q = params.get("layer") as LayerId | null;
       const pick = q ?? saved;
       if (pick && LAYERS.some((l) => l.id === pick)) setLayer(pick);
+      if (localStorage.getItem(GLOBE_KEY) === "1") setGlobe(true);
     } catch {
-      /* ignore */
+      /* storage blocked */
     }
 
-    const map = L.map(mapEl.current, {
-      center: hasQuery ? [qlat, qlon] : INDIA,
-      zoom: hasQuery ? 8 : 5,
-      minZoom: 3,
-      maxZoom: 15,
-      zoomControl: false,
-      worldCopyJump: true,
-      preferCanvas: true, // boundaries & tracks drawn on one canvas instead of hundreds of SVG nodes
-      zoomSnap: 0.5,
-      zoomDelta: 0.5,
-      wheelPxPerZoomLevel: 110,
-      wheelDebounceTime: 30,
-      maxBounds: [
-        [-85, -360],
-        [85, 360],
-      ],
+    const map = new maplibregl.Map({
+      container: mapEl.current,
+      style: baseStyle(),
+      center: hasQuery ? [qlon, qlat] : INDIA,
+      zoom: hasQuery ? 7 : 3.6,
+      minZoom: 1.2,
+      maxZoom: 14,
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
+      attributionControl: { compact: true },
+      fadeDuration: 150,
     });
+    map.touchZoomRotate.disableRotation();
+    map.keyboard.disableRotation();
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     mapRef.current = map;
-    L.control.zoom({ position: "bottomright" }).addTo(map);
 
-    // Base imagery
-    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-      maxZoom: 15,
-      attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
-    }).addTo(map);
+    map.on("load", () => {
+      setReady(true);
+      setViewTick((t) => t + 1); // load the data for the first view without waiting for a move
+    });
+    // A missing font or tile should never break the map
+    map.on("error", (e) => console.warn("[map]", e?.error?.message ?? e));
 
-    // Live satellite frames (EUMETSAT / NASA) are added on the Satellite layer
-    map.createPane("night").style.zIndex = "240";
-    nightLayer.current = L.tileLayer(
-      "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
-      { pane: "night", maxNativeZoom: 8, maxZoom: 15, attribution: "Night lights: NASA Black Marble" },
-    );
-    // Day/night shading from the real sun position, between the base imagery and the clouds
-    const shadePane = map.createPane("shade");
-    shadePane.style.zIndex = "245";
-    shadePane.style.pointerEvents = "none";
-    shadeRef.current = L.DomUtil.create("canvas", "", shadePane) as HTMLCanvasElement;
-    map.createPane("sat").style.zIndex = "250";
-    map.createPane("tracks").style.zIndex = "610";
-    trackLayer.current = L.layerGroup([], { pane: "tracks" }).addTo(map);
-    map.createPane("cyclones").style.zIndex = "620";
-    cycloneLayer.current = L.layerGroup([], { pane: "cyclones" }).addTo(map);
-    const adminPane = map.createPane("admin");
-    adminPane.style.zIndex = "455";
-    adminPane.style.pointerEvents = "none";
-    adminLayer.current = L.layerGroup([], { pane: "admin" }).addTo(map);
-    map.attributionControl.addAttribution("Boundaries: geoBoundaries (CC BY 4.0) · Cyclones: GDACS");
-
-    // Overlay panes for the weather canvases, under the place labels
-    const heatPane = map.createPane("heat");
-    heatPane.style.zIndex = "350";
-    heatPane.style.pointerEvents = "none";
-    const flowPane = map.createPane("flow");
-    flowPane.style.zIndex = "360";
-    flowPane.style.pointerEvents = "none";
-    heatRef.current = L.DomUtil.create("canvas", "", heatPane) as HTMLCanvasElement;
-    flowRef.current = L.DomUtil.create("canvas", "", flowPane) as HTMLCanvasElement;
-    map.createPane("radar").style.zIndex = "340";
-
-    // Labels & borders on top of everything
-    map.createPane("labels").style.zIndex = "450";
-    map.getPane("labels")!.style.pointerEvents = "none";
-    // Borders and place names (Esri reference layer, no API key needed)
-    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
-      pane: "labels",
-      maxZoom: 15,
-      attribution: "Labels © Esri",
-    }).addTo(map);
-
-    // Single click opens a place; a double click is left to zoom the map (otherwise both fire and race).
+    // Single click opens a place; a double click is left to zoom the map.
     let clickTimer: ReturnType<typeof setTimeout> | undefined;
-    map.on("click", (e: L.LeafletMouseEvent) => {
+    map.on("click", (e: MapMouseEvent) => {
       clearTimeout(clickTimer);
-      const p = e.latlng.wrap();
+      if (map.getLayer("tc-pts") && map.queryRenderedFeatures(e.point, { layers: ["tc-pts"] }).length) return;
+      const p = e.lngLat.wrap();
       clickTimer = setTimeout(() => setSelected({ lat: p.lat, lon: p.lng }), 230);
     });
     map.on("dblclick", () => clearTimeout(clickTimer));
-    map.on("zoomstart", () => {
-      if (heatRef.current) heatRef.current.style.visibility = "hidden";
-      if (flowRef.current) flowRef.current.style.visibility = "hidden";
-      if (shadeRef.current) shadeRef.current.style.visibility = "hidden";
-    });
-    // Blend modes and CSS filters are costly to repaint every animation frame, so pause them during pan/zoom.
-    const sat = map.getPane("sat")!;
-    map.on("movestart zoomstart", () => {
-      sat.dataset.blend = sat.style.mixBlendMode;
-      sat.dataset.filter = sat.style.filter;
-      sat.style.mixBlendMode = "";
-      sat.style.filter = "";
-    });
-    map.on("moveend zoomend", () => {
-      if (sat.dataset.blend !== undefined) sat.style.mixBlendMode = sat.dataset.blend;
-      if (sat.dataset.filter !== undefined) sat.style.filter = sat.dataset.filter;
-    });
+
     let tick = 0;
-    map.on("moveend zoomend resize", () => {
-      // coalesce bursts of events (zoom fires both) into one re-render on the next frame
+    map.on("moveend", () => {
       cancelAnimationFrame(tick);
       tick = requestAnimationFrame(() => setViewTick((t) => t + 1));
     });
@@ -184,10 +125,22 @@ export default function MapExplorer() {
   useEffect(() => {
     try {
       localStorage.setItem(LAYER_KEY, layer);
+      localStorage.setItem(GLOBE_KEY, globe ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }, [layer]);
+  }, [layer, globe]);
+
+  /* ─── Globe / flat ────────────────────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    try {
+      map.setProjection({ type: globe ? "globe" : "mercator" });
+    } catch (e) {
+      console.warn("[map] projection", e);
+    }
+  }, [globe, ready]);
 
   /* ─── Selected point marker ───────────────────────────── */
   useEffect(() => {
@@ -196,10 +149,9 @@ export default function MapExplorer() {
     markerRef.current?.remove();
     markerRef.current = null;
     if (!selected) return;
-    markerRef.current = L.marker([selected.lat, selected.lon], {
-      icon: L.divIcon({ className: "", html: '<div class="pin-pulse"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }),
-      keyboard: false,
-    }).addTo(map);
+    const el = document.createElement("div");
+    el.className = "pin-pulse";
+    markerRef.current = new maplibregl.Marker({ element: el }).setLngLat([selected.lon, selected.lat]).addTo(map);
   }, [selected]);
 
   /* ─── Live satellite clouds ───────────────────────────── */
@@ -218,62 +170,53 @@ export default function MapExplorer() {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    satStack.current?.clear();
-    satStack.current = null;
-    if (layer !== "satellite" || !sat) return;
-    satStack.current = new FrameStack(
-      map,
-      (i) => {
-        const time = sat.frames[Math.min(i, sat.frames.length - 1)] || sat.frames[sat.frames.length - 1] || "";
-        return sat.kind === "wms"
-          ? L.tileLayer.wms(sat.url, {
-              pane: "sat",
-              layers: sat.layer!,
-              format: "image/png",
-              transparent: true,
-              version: "1.3.0",
-              maxNativeZoom: sat.maxNativeZoom,
-              maxZoom: 15,
-              updateWhenZooming: false,
-              attribution: sat.attribution,
-              ...(time ? { time } : {}),
-            } as L.WMSOptions)
-          : L.tileLayer(sat.url, {
-              pane: "sat",
-              maxNativeZoom: sat.maxNativeZoom,
-              maxZoom: 15,
-              updateWhenZooming: false,
-              attribution: sat.attribution,
-              time: time || new Date(Date.now() - 86400_000).toISOString().slice(0, 10),
-            } as L.TileLayerOptions);
-      },
-      sat.opacity,
-    );
+    if (!map || !ready) return;
+    satFrames.current?.clear();
+    satFrames.current = null;
+    if (layer !== "satellite" || !sat || !sat.frames.length) return;
+    const ir = sat.id !== "truecolor";
+    satFrames.current = new FrameStack(map, "sat", SLOT_SAT, sat.frames.length, sat.maxNativeZoom, ir ? 0.9 : sat.opacity, (i) => satTileUrl(sat, i), ir ? 0.25 : 0);
     const last = sat.frames.length - 1;
     setSatIdx(last);
-    satStack.current.show(last, sat.frames.length);
-    // Start the loop once the latest frame has had a moment to load.
+    satFrames.current.show(last);
     const t = sat.frames.length > 1 ? setTimeout(() => setPlaying(true), 2500) : undefined;
     return () => clearTimeout(t);
-  }, [layer, sat]);
+  }, [layer, sat, ready]);
 
   useEffect(() => {
-    if (sat) satStack.current?.show(satIdx, sat.frames.length);
+    satFrames.current?.show(satIdx);
   }, [satIdx, sat]);
 
-  /* Infrared clouds look best over a dark night-lights base: the "screen" blend makes cold bright cloud tops
-     glow while the warm (dark) ground disappears, so city lights and coastlines show through. */
+  // Infrared clouds sit on the night-lights base (city lights show through gaps); no extra night shading there.
+  const irMode = layer === "satellite" && !!sat && sat.id !== "truecolor";
   useEffect(() => {
     const map = mapRef.current;
-    const pane = map?.getPane("sat");
-    if (!map || !pane) return;
-    const ir = layer === "satellite" && !!sat && sat.id !== "truecolor";
-    if (ir) nightLayer.current?.addTo(map);
-    else nightLayer.current?.remove();
-    pane.style.mixBlendMode = ir ? "screen" : "";
-    pane.style.filter = ir ? "contrast(1.45) brightness(1.08)" : "";
-  }, [layer, sat]);
+    if (!map || !ready) return;
+    map.setLayoutProperty("night", "visibility", irMode ? "visible" : "none");
+    map.setLayoutProperty("shade", "visibility", irMode ? "none" : "visible");
+  }, [irMode, ready]);
+
+  /* ─── Day / night shading (GPU image, follows the map perfectly) ─── */
+  useEffect(() => {
+    const t = setInterval(() => setSunTick((n) => n + 1), 5 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const sun = subsolarPoint(new Date());
+    const rad = Math.PI / 180;
+    const sinD = Math.sin(sun.lat * rad);
+    const cosD = Math.cos(sun.lat * rad);
+    const url = mercatorImage(720, 512, [-180, -MERC_MAX, 180, MERC_MAX], (lat, lon) => {
+      const elev = Math.asin(Math.max(-1, Math.min(1, Math.sin(lat * rad) * sinD + Math.cos(lat * rad) * cosD * Math.cos((lon - sun.lon) * rad)))) / rad;
+      // full daylight above +2°, deepening through civil/nautical twilight, full night below −12°
+      const t = Math.max(0, Math.min(1, (2 - elev) / 14));
+      return [3, 7, 20, 255 * 0.62 * t * t * (3 - 2 * t)];
+    });
+    (map.getSource("shade") as ImageSource | undefined)?.updateImage({ url, coordinates: WORLD });
+  }, [sunTick, ready]);
 
   /* ─── Active cyclones (GDACS) — shown on every layer ─── */
   useEffect(() => {
@@ -288,26 +231,33 @@ export default function MapExplorer() {
   }, []);
 
   useEffect(() => {
-    const group = cycloneLayer.current;
-    const tracks = trackLayer.current;
-    if (!group || !tracks) return;
-    group.clearLayers();
-    tracks.clearLayers();
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    tcMarkers.current.forEach((m) => m.remove());
+    tcMarkers.current = [];
     const ctrl = new AbortController();
-    type TF = { kind: "past" | "forecast" | "point" | "area"; level?: string; label?: string; windKmh?: number; time?: string; geometry: GeoJSON.Geometry };
+    const cone: GeoJSON.Feature[] = [];
+    const track: GeoJSON.Feature[] = [];
+    const points: GeoJSON.Feature[] = [];
+    const flush = () => {
+      (map.getSource("tcCone") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: cone });
+      (map.getSource("tcTrack") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: track });
+      (map.getSource("tcPts") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: points });
+    };
+    flush();
 
     for (const c of cyclones) {
-      // Current position: the standard tropical-cyclone symbol, coloured by IMD intensity class once the track is known.
       const fallback = c.alertLevel === "Red" ? IMD_CLASSES[5] : c.alertLevel === "Orange" ? IMD_CLASSES[3] : IMD_CLASSES[2];
-      const marker = L.marker([c.lat, c.lon], { icon: cycloneIcon(c.name, fallback), pane: "cyclones", title: c.name, riseOnHover: true })
-        .bindPopup(cyclonePopup(c, fallback, undefined))
-        .addTo(group);
+      const el = document.createElement("div");
+      el.innerHTML = cycloneIcon(c.name, fallback);
+      const popup = new maplibregl.Popup({ offset: 18, className: "tc-popup", maxWidth: "260px" }).setHTML(cyclonePopup(c, fallback));
+      const marker = new maplibregl.Marker({ element: el }).setLngLat([c.lon, c.lat]).setPopup(popup).addTo(map);
+      tcMarkers.current.push(marker);
 
       fetch(`/api/cyclones/track?id=${encodeURIComponent(c.id)}${c.episodeId ? `&episode=${encodeURIComponent(c.episodeId)}` : ""}`, { signal: ctrl.signal })
         .then((r) => r.json())
-        .then((d: { features: TF[] }) => {
+        .then((d: { features: TrackFeature[] }) => {
           const feats = d.features ?? [];
-          // Ordered track points (past → forecast)
           const pts = feats
             .filter((x) => x.kind === "point" && x.geometry.type === "Point")
             .map((x) => {
@@ -315,144 +265,143 @@ export default function MapExplorer() {
               const forecast = x.level === "cone" || /forecast/i.test(x.label ?? "");
               return { lat: plat, lon: plon, time: x.time, wind: x.windKmh, forecast, cls: imdClass(x.windKmh) };
             })
-            .sort((p1, p2) => (p1.time ?? "").localeCompare(p2.time ?? ""));
+            .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
 
-          // 1. Forecast cone: a smooth, rounded envelope that widens with forecast uncertainty
+          // 1. Forecast cone: smooth rounded envelope that widens with uncertainty
           const future = pts.filter((p) => p.forecast);
-          const conePolys = future.length
-            ? [smoothCone([{ lat: c.lat, lon: c.lon, r: 35 }, ...future.map((p, i) => ({ lat: p.lat, lon: p.lon, r: 60 + 45 * i }))])]
-            : feats.filter((x) => x.kind === "area" && x.level === "cone").map((x) => x.geometry);
-          for (const g of conePolys) {
-            L.geoJSON({ type: "Feature", properties: {}, geometry: g } as GeoJSON.Feature, {
-              pane: "tracks",
-              interactive: false,
-              style: { stroke: true, color: "#ffffff", weight: 1, opacity: 0.18, fillColor: "#d9dee8", fillOpacity: 0.2, lineJoin: "round" },
-            }).addTo(tracks);
+          if (future.length) {
+            cone.push({ type: "Feature", properties: {}, geometry: smoothCone([{ lat: c.lat, lon: c.lon, r: 35 }, ...future.map((p, i) => ({ lat: p.lat, lon: p.lon, r: 60 + 45 * i }))]) });
+          } else {
+            for (const x of feats) if (x.kind === "area" && x.level === "cone") cone.push({ type: "Feature", properties: {}, geometry: x.geometry });
           }
 
-          // 2. Track: dark casing + segments coloured by intensity (forecast part lighter)
+          // 2. Track segments coloured by intensity (forecast part lighter)
           if (pts.length > 1) {
-            L.polyline(pts.map((p) => [p.lat, p.lon] as L.LatLngTuple), { pane: "tracks", color: "#000", weight: 5, opacity: 0.35, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(tracks);
             for (let i = 0; i < pts.length - 1; i++) {
-              const p = pts[i];
-              L.polyline(
-                [
-                  [p.lat, p.lon],
-                  [pts[i + 1].lat, pts[i + 1].lon],
-                ],
-                { pane: "tracks", color: (pts[i + 1].forecast ? pts[i + 1].cls : p.cls)?.color ?? "#ffffff", weight: 2.6, opacity: pts[i + 1].forecast ? 0.7 : 1, interactive: false, lineCap: "round" },
-              ).addTo(tracks);
+              const a = pts[i];
+              const b = pts[i + 1];
+              track.push({
+                type: "Feature",
+                properties: { color: (b.forecast ? b.cls : a.cls)?.color ?? "#ffffff", opacity: b.forecast ? 0.7 : 1 },
+                geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
+              });
             }
           } else {
-            // no point list: fall back to GDACS lines
-            for (const f of feats.filter((x) => x.kind === "past" || x.kind === "forecast")) {
-              L.geoJSON({ type: "Feature", properties: {}, geometry: f.geometry } as GeoJSON.Feature, {
-                pane: "tracks",
-                interactive: false,
-                style: { color: "#ffffff", weight: 2, opacity: f.kind === "past" ? 0.9 : 0.5 },
-              }).addTo(tracks);
+            for (const x of feats) {
+              if (x.kind === "past" || x.kind === "forecast") track.push({ type: "Feature", properties: { color: "#ffffff", opacity: x.kind === "past" ? 0.9 : 0.5 }, geometry: x.geometry });
             }
           }
 
-          // 3. Points with date & time labels (local time)
-          const past = pts.filter((p) => !p.forecast && p.wind != null);
-          const latest = past.length ? { wind: past[past.length - 1].wind as number } : null;
+          // 3. Points with date & time labels
           const step = pts.length > 10 ? 2 : 1;
           pts.forEach((p, i) => {
             const color = p.cls?.color ?? "#ffffff";
-            const m = L.circleMarker([p.lat, p.lon], {
-              pane: "tracks",
-              radius: 5,
-              weight: p.forecast ? 2 : 1.5,
-              color: p.forecast ? color : "rgba(0,0,0,0.6)",
-              fillColor: p.forecast ? "#ffffff" : color,
-              fillOpacity: 1,
-            })
-              .bindPopup(
-                `<div class="tc-pop"><div class="tc-pop-name">${escapeHtml(c.name)}${p.forecast ? " · forecast" : ""}</div>${p.time ? `<div>${escapeHtml(fmtTrackTime(p.time, true))}</div>` : ""}${p.wind != null ? `<div style="color:${color};font-weight:600">${p.wind} km/h · ${escapeHtml(p.cls?.name ?? "")}</div>` : ""}</div>`,
-              )
-              .addTo(tracks);
             const isNow = !p.forecast && (i === pts.length - 1 || pts[i + 1].forecast);
-            if (p.time && !isNow && (i % step === 0 || i === pts.length - 1)) {
-              m.bindTooltip(fmtTrackTime(p.time), { permanent: true, direction: "right", offset: [7, 0], className: `tc-time${p.forecast ? " tc-time-fc" : ""}` });
-            }
+            const props: Record<string, unknown> = {
+              color,
+              forecast: p.forecast,
+              popup: `<div class="tc-pop"><div class="tc-pop-name">${escapeHtml(c.name)}${p.forecast ? " · forecast" : ""}</div>${p.time ? `<div>${escapeHtml(fmtTrackTime(p.time, true))}</div>` : ""}${p.wind != null ? `<div style="color:${color};font-weight:600">${p.wind} km/h · ${escapeHtml(p.cls?.name ?? "")}</div>` : ""}</div>`,
+            };
+            if (p.time && !isNow && (i % step === 0 || i === pts.length - 1)) props.label = fmtTrackTime(p.time);
+            points.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [p.lon, p.lat] } });
           });
-          const now = imdClass(latest?.wind) ?? fallback;
-          marker.setIcon(cycloneIcon(c.name, now));
-          marker.setPopupContent(cyclonePopup(c, now, latest?.wind));
+          flush();
+
+          const past = pts.filter((p) => !p.forecast && p.wind != null);
+          const wind = past.length ? (past[past.length - 1].wind as number) : undefined;
+          const now = imdClass(wind) ?? fallback;
+          el.innerHTML = cycloneIcon(c.name, now);
+          popup.setHTML(cyclonePopup(c, now, wind));
         })
         .catch(() => {});
     }
     return () => ctrl.abort();
-  }, [cyclones]);
+  }, [cyclones, ready]);
 
-  /* ─── District & taluk boundaries with names (zoom 7+ / 9+) ─── */
+  // Popups for track points + pointer cursor
   useEffect(() => {
     const map = mapRef.current;
-    const group = adminLayer.current;
-    if (!map || !group) return;
+    if (!map || !ready) return;
+    const onClick = (e: MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      const f = e.features?.[0];
+      if (!f) return;
+      new maplibregl.Popup({ offset: 10, className: "tc-popup", maxWidth: "260px" })
+        .setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number])
+        .setHTML(String(f.properties?.popup ?? ""))
+        .addTo(map);
+    };
+    const enter = () => (map.getCanvas().style.cursor = "pointer");
+    const leave = () => (map.getCanvas().style.cursor = "");
+    map.on("click", "tc-pts", onClick);
+    map.on("mouseenter", "tc-pts", enter);
+    map.on("mouseleave", "tc-pts", leave);
+    return () => {
+      map.off("click", "tc-pts", onClick);
+      map.off("mouseenter", "tc-pts", enter);
+      map.off("mouseleave", "tc-pts", leave);
+    };
+  }, [ready]);
+
+  /* ─── District & taluk boundaries with names (zoom 6+ / 8+) ─── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
     const z = map.getZoom();
-    const levels: (2 | 3)[] = z >= 9 ? [2, 3] : z >= 7 ? [2] : [];
-    const b = map.getBounds().pad(0.15);
-    const box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((v) => v.toFixed(1));
+    const levels: (2 | 3)[] = z >= 8 ? [2, 3] : z >= 6 ? [2] : [];
+    const b = map.getBounds();
+    const padX = (b.getEast() - b.getWest()) * 0.15;
+    const padY = (b.getNorth() - b.getSouth()) * 0.15;
+    const box = [b.getWest() - padX, b.getSouth() - padY, b.getEast() + padX, b.getNorth() + padY].map((v) => v.toFixed(1));
     const key = `${levels.join(",")}|${box.join(",")}`;
     if (key === adminKey.current) return;
     adminKey.current = key;
+    const setAdm = (lines: GeoJSON.Feature[], labels: GeoJSON.Feature[]) => {
+      (map.getSource("adm") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: lines });
+      (map.getSource("admLabels") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: labels });
+    };
     if (!levels.length) {
-      group.clearLayers();
+      setAdm([], []);
       return;
     }
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const results = await Promise.all(
-          levels.map((lvl) =>
-            fetch(`/api/boundaries?level=${lvl}&w=${box[0]}&s=${box[1]}&e=${box[2]}&n=${box[3]}`, { signal: ctrl.signal }).then((r) => r.json()),
-          ),
+        const results: FC[] = await Promise.all(
+          levels.map((lvl) => fetch(`/api/boundaries?level=${lvl}&w=${box[0]}&s=${box[1]}&e=${box[2]}&n=${box[3]}`, { signal: ctrl.signal }).then((r) => r.json())),
         );
-        group.clearLayers();
-        results.forEach((fc: GeoJSON.FeatureCollection, i) => {
-          const lvl = levels[i];
-          L.geoJSON(fc, {
-            pane: "admin",
-            interactive: false,
-            style: lvl === 2 ? { color: "#ffffff", weight: 1, opacity: 0.55, fill: false } : { color: "#ffffff", weight: 0.7, opacity: 0.35, dashArray: "3 4", fill: false },
-          }).addTo(group);
-          const inView = map.getBounds();
-          let count = 0;
-          const cap = lvl === 2 ? 70 : 120;
-          for (const f of fc.features) {
+        const lines: GeoJSON.Feature[] = [];
+        const labels: GeoJSON.Feature[] = [];
+        results.forEach((fc, i) => {
+          for (const f of fc.features ?? []) {
             const props = f.properties as { name?: string; label?: [number, number] } | null;
-            if (!props?.name || !props.label) continue;
-            if (!inView.contains([props.label[1], props.label[0]])) continue;
-            if (++count > cap) break;
-            L.marker([props.label[1], props.label[0]], {
-              pane: "admin",
-              interactive: false,
-              keyboard: false,
-              icon: L.divIcon({ className: lvl === 2 ? "admin-label admin-district" : "admin-label admin-taluk", html: escapeHtml(props.name), iconSize: [0, 0] }),
-            }).addTo(group);
+            lines.push({ type: "Feature", properties: { level: levels[i] }, geometry: f.geometry });
+            if (props?.name && props.label) labels.push({ type: "Feature", properties: { level: levels[i], name: props.name }, geometry: { type: "Point", coordinates: props.label } });
           }
         });
+        setAdm(lines, labels);
       } catch {
         /* aborted or unavailable */
       }
-    }, 400);
+    }, 300);
     return () => {
       clearTimeout(t);
       ctrl.abort();
     };
-  }, [viewTick]);
+  }, [viewTick, ready]);
 
   /* ─── Forecast grid for the visible area ──────────────── */
+  const timeIdxRef = useRef(0);
+  timeIdxRef.current = timeIdx;
+  const gridRef = useRef<GridData | null>(null);
+
   const loadGrid = useCallback(async () => {
     const map = mapRef.current;
     if (!map) return;
     const b = map.getBounds();
     const w = Math.max(-180, b.getWest());
     const e = Math.min(180, b.getEast());
-    const s = Math.max(-85, b.getSouth());
-    const n = Math.min(85, b.getNorth());
+    const s = Math.max(-80, b.getSouth());
+    const n = Math.min(80, b.getNorth());
     if (e <= w || n <= s) return;
     setGridLoading(true);
     try {
@@ -462,220 +411,133 @@ export default function MapExplorer() {
       const key = g.bbox.join(",") + g.cols + "x" + g.rows;
       if (key === gridKey.current) return;
       gridKey.current = key;
-      // keep the same wall-clock hour when the grid is replaced
       const prevTime = gridRef.current?.times[timeIdxRef.current];
       const idx = prevTime ? g.times.indexOf(prevTime) : -1;
       gridRef.current = g;
       setGrid(g);
       setTimeIdx(idx >= 0 ? idx : nowIndex(g.times));
     } catch {
-      /* network hiccup: keep the old grid */
+      /* keep the old grid */
     } finally {
       setGridLoading(false);
     }
   }, []);
 
-  const timeIdxRef = useRef(0);
-  timeIdxRef.current = timeIdx;
-  const gridRef = useRef<GridData | null>(null);
-
   useEffect(() => {
-    if (!def.gridVar) return;
-    const t = setTimeout(loadGrid, 600);
+    if (!def.gridVar || !ready) return;
+    const t = setTimeout(loadGrid, 500);
     return () => clearTimeout(t);
-  }, [viewTick, def.gridVar, loadGrid]);
+  }, [viewTick, def.gridVar, loadGrid, ready]);
 
-  /* ─── Day / night shading ─────────────────────────────── */
-  useEffect(() => {
-    const t = setInterval(() => setSunTick((n) => n + 1), 5 * 60_000);
-    return () => clearInterval(t);
-  }, []);
-
+  /* ─── Weather field (GPU image) + numbers ─────────────── */
   useEffect(() => {
     const map = mapRef.current;
-    const canvas = shadeRef.current;
-    if (!map || !canvas) return;
-    // Infrared mode already sits on the night-lights base, so no extra shading there.
-    const ir = layer === "satellite" && !!sat && sat.id !== "truecolor";
-    if (ir) {
-      canvas.style.visibility = "hidden";
-      return;
-    }
-    const size = map.getSize();
-    const pad = { x: Math.round(size.x / 2), y: Math.round(size.y / 2) }; // extra margin so panning doesn't reveal edges
-    const SCALE = 6; // compute at 1/6 resolution; the browser smooths it when stretching → soft twilight edge
-    const W = Math.ceil((size.x + 2 * pad.x) / SCALE);
-    const H = Math.ceil((size.y + 2 * pad.y) / SCALE);
-    canvas.width = W;
-    canvas.height = H;
-    canvas.style.width = `${W * SCALE}px`;
-    canvas.style.height = `${H * SCALE}px`;
-    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([-pad.x, -pad.y]));
-
-    const sun = subsolarPoint(new Date());
-    const rad = Math.PI / 180;
-    const sinD = Math.sin(sun.lat * rad);
-    const cosD = Math.cos(sun.lat * rad);
-    // Web Mercator: longitude depends only on x, latitude only on y
-    const lons = Array.from({ length: W }, (_, x) => map.containerPointToLatLng([x * SCALE - pad.x, 0]).lng);
-    const lats = Array.from({ length: H }, (_, y) => map.containerPointToLatLng([0, y * SCALE - pad.y]).lat);
-    const cosH = lons.map((lng) => Math.cos((lng - sun.lon) * rad));
-    const ctx = canvas.getContext("2d")!;
-    const img = ctx.createImageData(W, H);
-    const MAX = 0.62;
-    for (let y = 0; y < H; y++) {
-      const la = lats[y] * rad;
-      const a = Math.sin(la) * sinD;
-      const b = Math.cos(la) * cosD;
-      for (let x = 0; x < W; x++) {
-        const elev = Math.asin(Math.max(-1, Math.min(1, a + b * cosH[x]))) / rad; // sun elevation in degrees
-        // full daylight above +2°, deepening through civil/nautical twilight, full night below −12°
-        const t = Math.max(0, Math.min(1, (2 - elev) / 14));
-        const alpha = MAX * t * t * (3 - 2 * t);
-        const i = (y * W + x) * 4;
-        img.data[i] = 3;
-        img.data[i + 1] = 7;
-        img.data[i + 2] = 20;
-        img.data[i + 3] = Math.round(alpha * 255);
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    canvas.style.visibility = "visible";
-  }, [viewTick, sunTick, layer, sat]);
-
-  /* ─── Heat map + value labels ─────────────────────────── */
-  useEffect(() => {
-    const map = mapRef.current;
-    const canvas = heatRef.current;
-    if (!map || !canvas) return;
-    const size = map.getSize();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = size.x * dpr;
-    canvas.height = size.y * dpr;
-    canvas.style.width = `${size.x}px`;
-    canvas.style.height = `${size.y}px`;
-    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0, 0]));
-    canvas.style.visibility = "visible";
-    const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size.x, size.y);
-    if (!grid || !def.gridVar || !def.stops) return;
+    if (!map || !ready) return;
+    const heat = map.getSource("heat") as ImageSource | undefined;
+    const valuesSrc = map.getSource("values") as GeoJSONSource | undefined;
+    const hide = () => {
+      map.setLayoutProperty("heat", "visibility", "none");
+      valuesSrc?.setData({ type: "FeatureCollection", features: [] });
+    };
+    if (!grid || !def.gridVar || !def.stops) return hide();
     const values = grid.values[def.gridVar][Math.min(timeIdx, grid.times.length - 1)];
-    if (!values) return;
+    if (!values) return hide();
 
-    const step = 6;
-    const w = Math.ceil(size.x / step);
-    const h = Math.ceil(size.y / step);
-    const off = document.createElement("canvas");
-    off.width = w;
-    off.height = h;
-    const octx = off.getContext("2d")!;
-    const img = octx.createImageData(w, h);
     const scale = makeScale(def.stops);
-    const lons = new Float64Array(w);
-    const lats = new Float64Array(h);
-    for (let x = 0; x < w; x++) lons[x] = wrapLon(map.containerPointToLatLng([x * step, 0]).lng);
-    for (let y = 0; y < h; y++) lats[y] = map.containerPointToLatLng([0, y * step]).lat;
-    const alpha = def.opacity;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const v = sample(grid, values, lats[y], lons[x]);
-        if (Number.isNaN(v)) continue;
-        const [r, g, b, a] = scale(v);
-        const i = (y * w + x) * 4;
-        img.data[i] = r;
-        img.data[i + 1] = g;
-        img.data[i + 2] = b;
-        img.data[i + 3] = a * alpha;
-      }
-    }
-    octx.putImageData(img, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(off, 0, 0, w * step, h * step);
+    const [w, s, e, n] = grid.bbox;
+    const url = mercatorImage(256, 256, [w, s, e, n], (lat, lon) => {
+      const v = sample(grid, values, lat, lon);
+      return Number.isNaN(v) ? null : scale(v);
+    });
+    heat?.updateImage({
+      url,
+      coordinates: [
+        [w, Math.min(n, MERC_MAX)],
+        [e, Math.min(n, MERC_MAX)],
+        [e, Math.max(s, -MERC_MAX)],
+        [w, Math.max(s, -MERC_MAX)],
+      ],
+    });
+    map.setPaintProperty("heat", "raster-opacity", def.opacity);
+    map.setLayoutProperty("heat", "visibility", "visible");
 
+    const feats: GeoJSON.Feature[] = [];
     if (def.labels) {
-      ctx.font = "600 10px \"Inter Variable\", Inter, system-ui, -apple-system, Segoe UI, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const [gw, , , gn] = grid.bbox;
-      const dx = (grid.bbox[2] - gw) / (grid.cols - 1);
-      const dy = (gn - grid.bbox[1]) / (grid.rows - 1);
-      const minGapX = 120;
-      const minGapY = 80;
-      const last: { x: number; y: number }[] = [];
+      const dx = (e - w) / (grid.cols - 1);
+      const dy = (n - s) / (grid.rows - 1);
       for (let r = 0; r < grid.rows; r++) {
         for (let c = 0; c < grid.cols; c++) {
-          const p = map.latLngToContainerPoint([gn - r * dy, gw + c * dx]);
-          if (p.x < 20 || p.y < 70 || p.x > size.x - 20 || p.y > size.y - 90) continue;
-          if (last.some((q) => Math.abs(q.x - p.x) < minGapX && Math.abs(q.y - p.y) < minGapY)) continue;
-          last.push(p);
           const v = values[r * grid.cols + c];
-          const text =
-            layer === "temp" ? fmtTemp(v, prefs.tempUnit) : layer === "wind" ? fmtWind(v, prefs.windUnit).split(" ")[0] : String(Math.round(v));
-          ctx.fillStyle = "rgba(0,0,0,0.45)";
-          const tw = ctx.measureText(text).width + 8;
-          roundRect(ctx, p.x - tw / 2, p.y - 8, tw, 16, 8);
-          ctx.fill();
-          ctx.fillStyle = "#fff";
-          ctx.fillText(text, p.x, p.y + 0.5);
+          if (v == null || Number.isNaN(v)) continue;
+          const text = layer === "temp" ? fmtTemp(v, prefs.tempUnit) : layer === "wind" ? fmtWind(v, prefs.windUnit).split(" ")[0] : String(Math.round(v));
+          feats.push({ type: "Feature", properties: { text }, geometry: { type: "Point", coordinates: [w + c * dx, n - r * dy] } });
         }
       }
     }
-  }, [grid, timeIdx, layer, def, viewTick, prefs.tempUnit, prefs.windUnit]);
+    valuesSrc?.setData({ type: "FeatureCollection", features: feats });
+  }, [grid, timeIdx, layer, def, prefs.tempUnit, prefs.windUnit, ready]);
 
-  /* ─── Animated wind particles ─────────────────────────── */
+  /* ─── Animated wind particles (overlay canvas) ────────── */
   useEffect(() => {
     const map = mapRef.current;
     const canvas = flowRef.current;
     cancelAnimationFrame(rafRef.current);
-    if (!map || !canvas) return;
-    const size = map.getSize();
-    const dpr = 1; // thin wind lines look the same at 1x and cost 4x less on high-DPI screens
-    canvas.width = size.x * dpr;
-    canvas.height = size.y * dpr;
-    canvas.style.width = `${size.x}px`;
-    canvas.style.height = `${size.y}px`;
-    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0, 0]));
-    canvas.style.visibility = "visible";
+    if (!map || !canvas || !ready) return;
+    const { clientWidth: W, clientHeight: H } = map.getContainer();
+    canvas.width = W;
+    canvas.height = H;
     const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size.x, size.y);
+    ctx.clearRect(0, 0, W, H);
     if (layer !== "wind" || !grid) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const { u, v } = windComponents(grid, Math.min(timeIdx, grid.times.length - 1));
-    // Phones and low-core devices get fewer particles and ~30 fps, which looks the same but keeps panning smooth.
-    const lowEnd = (navigator.hardwareConcurrency || 8) <= 4 || size.x < 700;
-    const count = Math.round(Math.min(1800, (size.x * size.y) / 800) * (lowEnd ? 0.6 : 1));
-    let odd = false;
-    // Web Mercator: longitude depends only on x, latitude only on y, so precompute both once.
-    const lonAt = new Float64Array(size.x + 1);
-    const latAt = new Float64Array(size.y + 1);
-    for (let x = 0; x <= size.x; x++) lonAt[x] = wrapLon(map.containerPointToLatLng([x, 0]).lng);
-    for (let y = 0; y <= size.y; y++) latAt[y] = map.containerPointToLatLng([0, y]).lat;
-    const spawn = () => ({ x: Math.random() * size.x, y: Math.random() * size.y, age: Math.floor(Math.random() * 80), max: 60 + Math.random() * 60 });
+    const lowEnd = (navigator.hardwareConcurrency || 8) <= 4 || W < 700;
+    const count = Math.round(Math.min(1800, (W * H) / 800) * (lowEnd ? 0.6 : 1));
+    // On the globe, only screen points that actually lie on the Earth's surface are valid
+    // (a point in space doesn't survive the screen → map → screen round trip).
+    const onSurface = (x: number, y: number) => {
+      if (!globe) return true;
+      const back = map.project(map.unproject([x, y]));
+      return Math.abs(back.x - x) < 1.5 && Math.abs(back.y - y) < 1.5;
+    };
+    const spawn = () => {
+      let x = Math.random() * W;
+      let y = Math.random() * H;
+      for (let tries = 0; tries < 6 && !onSurface(x, y); tries++) {
+        x = Math.random() * W;
+        y = Math.random() * H;
+      }
+      return { x, y, age: onSurface(x, y) ? Math.floor(Math.random() * 80) : 999, max: 60 + Math.random() * 60 };
+    };
+    let tickN = 0;
     const particles = Array.from({ length: count }, spawn);
     const k = 0.05;
+    let odd = false;
+    let running = true;
 
     const frame = () => {
-      if (lowEnd && (odd = !odd)) {
-        rafRef.current = requestAnimationFrame(frame);
-        return;
-      }
+      if (!running) return;
+      rafRef.current = requestAnimationFrame(frame);
+      if (lowEnd && (odd = !odd)) return;
+      tickN++;
       ctx.globalCompositeOperation = "destination-in";
       ctx.fillStyle = "rgba(0,0,0,0.92)";
-      ctx.fillRect(0, 0, size.x, size.y);
+      ctx.fillRect(0, 0, W, H);
       ctx.globalCompositeOperation = "source-over";
       ctx.lineWidth = 1.15;
       ctx.strokeStyle = "rgba(255,255,255,0.78)";
       ctx.beginPath();
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
-        const lat = latAt[p.y | 0];
-        const lon = lonAt[p.x | 0];
-        const uu = sample(grid, u, lat, lon);
-        const vv = sample(grid, v, lat, lon);
+        if (globe && (i + tickN) % 6 === 0 && !onSurface(p.x, p.y)) {
+          particles[i] = { ...spawn(), age: 0 };
+          continue;
+        }
+        const ll = map.unproject([p.x, p.y]);
+        const lon = wrapLon(ll.lng);
+        const uu = sample(grid, u, ll.lat, lon);
+        const vv = sample(grid, v, ll.lat, lon);
         if (Number.isNaN(uu) || p.age++ > p.max) {
           particles[i] = { ...spawn(), age: 0 };
           continue;
@@ -686,19 +548,23 @@ export default function MapExplorer() {
         ctx.lineTo(nx, ny);
         p.x = nx;
         p.y = ny;
-        if (nx < 0 || ny < 0 || nx >= size.x || ny >= size.y) particles[i] = { ...spawn(), age: 0 };
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) particles[i] = { ...spawn(), age: 0 };
       }
       ctx.stroke();
-      rafRef.current = requestAnimationFrame(frame);
     };
+    // Particles live in screen space: clear them while the map moves, restart when it settles.
+    const pause = () => {
+      running = false;
+      cancelAnimationFrame(rafRef.current);
+      ctx.clearRect(0, 0, W, H);
+    };
+    map.on("movestart", pause);
     rafRef.current = requestAnimationFrame(frame);
-    const stop = () => cancelAnimationFrame(rafRef.current);
-    map.on("movestart zoomstart", stop);
     return () => {
-      stop();
-      map.off("movestart zoomstart", stop);
+      pause();
+      map.off("movestart", pause);
     };
-  }, [grid, timeIdx, layer, viewTick]);
+  }, [grid, timeIdx, layer, viewTick, ready, globe]);
 
   /* ─── Radar ───────────────────────────────────────────── */
   useEffect(() => {
@@ -714,21 +580,17 @@ export default function MapExplorer() {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    radarStack.current?.clear();
-    radarStack.current = null;
+    if (!map || !ready) return;
+    radarFrames.current?.clear();
+    radarFrames.current = null;
     if (layer !== "radar" || !radar.length) return;
-    radarStack.current = new FrameStack(
-      map,
-      (i) => L.tileLayer(radar[i].url, { pane: "radar", maxNativeZoom: 7, maxZoom: 15, updateWhenZooming: false, attribution: "Radar © RainViewer" }),
-      0.85,
-    );
-    radarStack.current.show(radarIdx, radar.length);
+    radarFrames.current = new FrameStack(map, "radar", SLOT_RADAR, radar.length, 7, 0.85, (i) => radar[i].url);
+    radarFrames.current.show(radar.length - 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layer, radar]);
+  }, [layer, radar, ready]);
 
   useEffect(() => {
-    radarStack.current?.show(radarIdx, radar.length);
+    radarFrames.current?.show(radarIdx);
   }, [radarIdx, radar]);
 
   /* ─── Playback ────────────────────────────────────────── */
@@ -737,11 +599,11 @@ export default function MapExplorer() {
     const t = setInterval(() => {
       // Only advance when the next frame has downloaded, so slow connections don't pile up requests.
       if (layer === "radar")
-        setRadarIdx((i) => (radar.length && radarStack.current?.ready((i + 1) % radar.length) !== false ? (i + 1) % radar.length : i));
+        setRadarIdx((i) => (radar.length && radarFrames.current?.ready((i + 1) % radar.length) !== false ? (i + 1) % radar.length : i));
       else if (layer === "satellite")
         setSatIdx((i) => {
           const n = sat?.frames.length ?? 0;
-          return n && satStack.current?.ready((i + 1) % n) !== false ? (i + 1) % n : i;
+          return n && satFrames.current?.ready((i + 1) % n) !== false ? (i + 1) % n : i;
         });
       else if (grid) setTimeIdx((i) => (i + 1) % grid.times.length);
     }, layer === "radar" || layer === "satellite" ? 700 : 1000);
@@ -750,7 +612,7 @@ export default function MapExplorer() {
 
   /* ─── Actions ─────────────────────────────────────────── */
   const flyTo = (p: PickedPlace) => {
-    mapRef.current?.flyTo([p.lat, p.lon], 9, { duration: 1.2 });
+    mapRef.current?.flyTo({ center: [p.lon, p.lat], zoom: 8, duration: 1400, essential: true });
     setSelected({ lat: p.lat, lon: p.lon, name: p.name, region: p.region, country: p.country });
   };
 
@@ -758,32 +620,20 @@ export default function MapExplorer() {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) => flyTo({ lat: pos.coords.latitude, lon: pos.coords.longitude, name: "" }),
-      () => alertOnce(),
+      () => toast("Location access is blocked. Allow it in your browser to see your local weather.", "error"),
       { enableHighAccuracy: false, timeout: 10000 },
     );
   };
 
   const timeline = useMemo(() => {
     if (layer === "radar") {
-      return {
-        count: radar.length,
-        idx: radarIdx,
-        set: setRadarIdx,
-        label: radar[radarIdx] ? fmtTime(radar[radarIdx].time * 1000) : "Loading radar…",
-        note: "Past 2 hours",
-      };
+      return { count: radar.length, idx: radarIdx, set: setRadarIdx, label: radar[radarIdx] ? fmtTime(radar[radarIdx].time * 1000) : "Loading radar…", note: "Past 2 hours" };
     }
     if (layer === "satellite") {
       if (!sat) return { count: 0, idx: 0, set: setSatIdx, label: "Loading live satellite…", note: "" };
-      const t = sat.frames[satIdx];
+      const t = sat.frames[Math.min(satIdx, sat.frames.length - 1)];
       const ms = t && t.length > 10 ? Date.parse(t) : NaN;
-      return {
-        count: sat.frames.length,
-        idx: satIdx,
-        set: setSatIdx,
-        label: Number.isFinite(ms) ? fmtTime(ms) : sat.label,
-        note: sat.note,
-      };
+      return { count: sat.frames.length, idx: Math.min(satIdx, sat.frames.length - 1), set: setSatIdx, label: Number.isFinite(ms) ? fmtTime(ms) : sat.label, note: sat.note };
     }
     return {
       count: grid?.times.length ?? 0,
@@ -796,7 +646,8 @@ export default function MapExplorer() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      <div ref={mapEl} className="absolute inset-0" aria-label="Interactive weather map" role="application" />
+      <div ref={mapEl} style={{ position: "absolute", inset: 0 }} aria-label="Interactive weather map" role="application" />
+      <canvas ref={flowRef} className="pointer-events-none absolute inset-0 z-[1] h-full w-full" aria-hidden="true" />
 
       {/* Search + locate */}
       <div className="pointer-events-none absolute left-3 top-[76px] z-[1000] flex w-[min(380px,calc(100vw-24px))] gap-2">
@@ -829,6 +680,18 @@ export default function MapExplorer() {
             <span>{l.label}</span>
           </button>
         ))}
+        <div className="mx-1 my-1 hidden h-px bg-white/10 sm:block" />
+        <button
+          onClick={() => setGlobe((g) => !g)}
+          aria-pressed={globe}
+          className={`flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition ${
+            globe ? "bg-white/15 text-white" : "text-white/70 hover:bg-white/10 hover:text-white"
+          }`}
+          title="Switch between a 3D globe and a flat map"
+        >
+          <GlobeIcon />
+          <span>{globe ? "Globe" : "Flat map"}</span>
+        </button>
       </nav>
 
       {/* Legend */}
@@ -848,58 +711,54 @@ export default function MapExplorer() {
       )}
 
       {/* Timeline */}
-      {timeline && (
-        <div className="glass absolute bottom-3 left-3 right-3 z-[1000] rounded-2xl px-3 py-2.5 sm:left-1/2 sm:right-auto sm:w-[620px] sm:-translate-x-1/2">
-          {layer === "satellite" && satSources.length > 0 && (
-            <div className="mb-2 flex gap-1 overflow-x-auto scrollbar-thin" role="tablist" aria-label="Satellite source">
-              {satSources.map((src) => (
-                <button
-                  key={src.id}
-                  role="tab"
-                  aria-selected={src.id === satId}
-                  onClick={() => {
-                    setPlaying(false);
-                    setSatId(src.id);
-                  }}
-                  className={`shrink-0 rounded-lg px-2.5 py-1 text-xs ${src.id === satId ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
-                >
-                  {src.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setPlaying((p) => !p)}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black hover:bg-white/90 disabled:opacity-40"
-              disabled={timeline.count < 2}
-              aria-label={playing ? "Pause" : "Play"}
-            >
-              <Icon name={playing ? "pause" : "play"} size={16} />
-            </button>
-            <div className="min-w-0 flex-1">
-              <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
-                <span className="truncate font-medium text-white">{timeline.label}</span>
-                <span className="shrink-0 text-xs text-white/60">
-                  {gridLoading && def.gridVar ? "Updating…" : timeline.note}
-                </span>
-              </div>
-              <input
-                type="range"
-                className="timeline w-full"
-                min={0}
-                max={Math.max(0, timeline.count - 1)}
-                value={timeline.idx}
-                onChange={(e) => {
+      <div className="glass absolute bottom-3 left-3 right-3 z-[1000] rounded-2xl px-3 py-2.5 sm:left-1/2 sm:right-auto sm:w-[620px] sm:-translate-x-1/2">
+        {layer === "satellite" && satSources.length > 0 && (
+          <div className="mb-2 flex gap-1 overflow-x-auto scrollbar-thin" role="tablist" aria-label="Satellite source">
+            {satSources.map((src) => (
+              <button
+                key={src.id}
+                role="tab"
+                aria-selected={src.id === satId}
+                onClick={() => {
                   setPlaying(false);
-                  timeline.set(Number(e.target.value));
+                  setSatId(src.id);
                 }}
-                aria-label="Time"
-              />
+                className={`shrink-0 rounded-lg px-2.5 py-1 text-xs ${src.id === satId ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
+              >
+                {src.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setPlaying((p) => !p)}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black hover:bg-white/90 disabled:opacity-40"
+            disabled={timeline.count < 2}
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            <Icon name={playing ? "pause" : "play"} size={16} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
+              <span className="truncate font-medium text-white">{timeline.label}</span>
+              <span className="shrink-0 text-xs text-white/60">{gridLoading && def.gridVar ? "Updating…" : timeline.note}</span>
             </div>
+            <input
+              type="range"
+              className="timeline w-full"
+              min={0}
+              max={Math.max(0, timeline.count - 1)}
+              value={timeline.idx}
+              onChange={(e) => {
+                setPlaying(false);
+                timeline.set(Number(e.target.value));
+              }}
+              aria-label="Time"
+            />
           </div>
         </div>
-      )}
+      </div>
       {selected && <PointPanel point={selected} onClose={() => setSelected(null)} />}
     </div>
   );
@@ -907,50 +766,121 @@ export default function MapExplorer() {
 
 /* ─── helpers ──────────────────────────────────────────── */
 
-function alertOnce() {
-  toast("Location access is blocked. Allow it in your browser to see your local weather.", "error");
+function GlobeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z" />
+    </svg>
+  );
+}
+
+function satTileUrl(sat: SatSource, i: number) {
+  const time = sat.frames[Math.min(i, sat.frames.length - 1)] || new Date(Date.now() - 86400_000).toISOString().slice(0, 10);
+  if (sat.kind === "xyz") return sat.url.replace("{time}", encodeURIComponent(time));
+  // EUMETSAT tiles come through our server (they need CORS headers for WebGL); MapLibre fills in the bbox
+  const q = new URLSearchParams({ layer: sat.layer ?? "", time });
+  return `${window.location.origin}/api/sat-tile?${q}&bbox={bbox-epsg-3857}`;
 }
 
 /**
- * Animation frames for satellite / radar. Frames are created lazily (current + next only), so the
- * browser downloads one frame at a time instead of every frame at once.
+ * Animation frames for satellite / radar. Each frame is its own raster layer; only the current and the next
+ * frame are created, so the browser downloads one frame at a time instead of every frame at once.
  */
 class FrameStack {
-  private layers = new Map<number, L.TileLayer>();
+  private made = new Set<number>();
   constructor(
-    private map: L.Map,
-    private make: (i: number) => L.TileLayer,
+    private map: MLMap,
+    private prefix: string,
+    private before: string,
+    private count: number,
+    private maxzoom: number,
     private opacity: number,
+    private url: (i: number) => string,
+    private contrast = 0,
   ) {}
+  private id(i: number) {
+    return `${this.prefix}-${i}`;
+  }
   private ensure(i: number) {
-    if (this.layers.has(i)) return;
+    if (this.made.has(i)) return;
     try {
-      const l = this.make(i);
-      l.setOpacity(0);
-      l.addTo(this.map);
-      this.layers.set(i, l);
+      this.map.addSource(this.id(i), { type: "raster", tiles: [this.url(i)], tileSize: 256, maxzoom: this.maxzoom });
+      this.map.addLayer(
+        { id: this.id(i), type: "raster", source: this.id(i), paint: { "raster-opacity": 0, "raster-fade-duration": 0, "raster-contrast": this.contrast } },
+        this.before,
+      );
+      this.made.add(i);
     } catch (e) {
-      // one broken frame must never take the whole map down
-      console.warn("frame layer failed", e);
+      console.warn("[map] frame layer failed", e); // one broken frame must never take the whole map down
     }
   }
-  show(iIn: number, count: number) {
-    if (count <= 0) return;
-    // the index can belong to the previous feed (e.g. frame 8 of 8, then a 1-frame feed is chosen)
-    const i = ((iIn % count) + count) % count;
+  show(iIn: number) {
+    if (this.count <= 0) return;
+    const i = ((iIn % this.count) + this.count) % this.count;
     this.ensure(i);
-    if (count > 1) this.ensure((i + 1) % count);
-    this.layers.forEach((l, k) => l.setOpacity(k === i ? this.opacity : 0));
+    if (this.count > 1) this.ensure((i + 1) % this.count);
+    for (const k of this.made) {
+      if (this.map.getLayer(this.id(k))) this.map.setPaintProperty(this.id(k), "raster-opacity", k === i ? this.opacity : 0);
+    }
   }
-  /** true when frame i has finished downloading (or doesn't exist yet and can be created). */
+  /** true when frame i has finished downloading the visible tiles (or doesn't exist yet). */
   ready(i: number) {
-    const l = this.layers.get(i) as (L.TileLayer & { isLoading?: () => boolean }) | undefined;
-    return !l || !l.isLoading || !l.isLoading();
+    if (!this.made.has(i)) return true;
+    try {
+      return this.map.isSourceLoaded(this.id(i));
+    } catch {
+      return true;
+    }
   }
   clear() {
-    this.layers.forEach((l) => l.remove());
-    this.layers.clear();
+    for (const k of this.made) {
+      try {
+        if (this.map.getLayer(this.id(k))) this.map.removeLayer(this.id(k));
+        if (this.map.getSource(this.id(k))) this.map.removeSource(this.id(k));
+      } catch {
+        /* map already gone */
+      }
+    }
+    this.made.clear();
   }
+}
+
+/**
+ * Renders a lat/lon field into a PNG whose rows are spaced in Web-Mercator, so MapLibre can stretch it over
+ * the bounding box exactly. The GPU smooths it (linear resampling) — no per-frame CPU work while panning.
+ */
+function mercatorImage(
+  w: number,
+  h: number,
+  [west, south, east, north]: [number, number, number, number],
+  fn: (lat: number, lon: number) => readonly [number, number, number, number] | number[] | null,
+) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(w, h);
+  const rad = Math.PI / 180;
+  const merc = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (Math.max(-MERC_MAX, Math.min(MERC_MAX, lat)) * rad) / 2));
+  const yN = merc(north);
+  const yS = merc(south);
+  for (let y = 0; y < h; y++) {
+    const my = yN + ((y + 0.5) / h) * (yS - yN);
+    const lat = (2 * Math.atan(Math.exp(my)) - Math.PI / 2) / rad;
+    for (let x = 0; x < w; x++) {
+      const lon = west + ((x + 0.5) / w) * (east - west);
+      const c = fn(lat, lon);
+      if (!c) continue;
+      const i = (y * w + x) * 4;
+      img.data[i] = c[0];
+      img.data[i + 1] = c[1];
+      img.data[i + 2] = c[2];
+      img.data[i + 3] = c[3];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL("image/png");
 }
 
 /* IMD intensity classes for North Indian Ocean cyclones (maximum sustained wind, km/h). */
@@ -998,7 +928,6 @@ function smoothCone(points: { lat: number; lon: number; r: number }[]): GeoJSON.
       samples.push([p.lon + kLon * Math.cos(t), p.lat + kLat * Math.sin(t)]);
     }
   }
-  // Andrew's monotone-chain convex hull
   const pts = samples.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
   const lower: [number, number][] = [];
@@ -1016,25 +945,20 @@ function smoothCone(points: { lat: number; lon: number; r: number }[]): GeoJSON.
   return { type: "Polygon", coordinates: [[...hull, hull[0]]] };
 }
 
-/** GDACS times are UTC; show them in the viewer's local time, e.g. "Fri 30, 05:30". */
+/** GDACS times are UTC; show them in the viewer's local time, e.g. "Fri 30 Oct, 5:30 pm". */
 function fmtTrackTime(t: string, long = false) {
   const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : `${t}Z`;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return t.replace("T", " ").slice(5, 16);
   const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleString("en-IN", o);
-  const hm = part({ hour: "2-digit", minute: "2-digit", hour12: false });
+  const hm = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
   return long
     ? `${part({ weekday: "long" })}, ${part({ day: "numeric" })} ${part({ month: "short" })} · ${hm}`
     : `${part({ weekday: "short" })} ${part({ day: "numeric" })} ${part({ month: "short" })}, ${hm}`;
 }
 
 function cycloneIcon(name: string, cls: ImdClass) {
-  return L.divIcon({
-    className: "",
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    html: `<div class="tc-marker" style="--c:${cls.color}"><svg viewBox="0 0 32 32" width="34" height="34"><path d="M16 9.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 3.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z" fill="var(--c)" stroke="#fff" stroke-width="1.2"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="var(--c)" stroke-width="2" stroke-linecap="round"/></svg><span class="tc-tag">${escapeHtml(name.toUpperCase())}<em>${cls.short}</em></span></div>`,
-  });
+  return `<div class="tc-marker" style="--c:${cls.color}"><svg viewBox="0 0 32 32" width="34" height="34"><path d="M16 9.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 3.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z" fill="var(--c)" stroke="#fff" stroke-width="1.2"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/><path d="M16 9.5C16 5 19.5 2.2 24 2.4c-3 1.4-4.6 3.8-4.6 7.6M16 22.5c0 4.5-3.5 7.3-8 7.1 3-1.4 4.6-3.8 4.6-7.6" fill="none" stroke="var(--c)" stroke-width="2" stroke-linecap="round"/></svg><span class="tc-tag">${escapeHtml(name.toUpperCase())}<em>${cls.short}</em></span></div>`;
 }
 
 function cyclonePopup(c: { name: string; alertLevel: string; severity: string; link: string }, cls: ImdClass, wind?: number) {
@@ -1057,7 +981,7 @@ function nowIndex(times: string[]) {
 }
 
 function fmtTime(ms: number) {
-  return new Date(ms).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return new Date(ms).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 function relHours(ms: number) {
@@ -1076,14 +1000,4 @@ function legendValue(layer: LayerId, v: number, prefs: { tempUnit: "C" | "F"; wi
   if (layer === "temp") return fmtTemp(v, prefs.tempUnit);
   if (layer === "wind") return fmtWind(v, prefs.windUnit).split(" ")[0];
   return String(v);
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
 }

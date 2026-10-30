@@ -32,19 +32,19 @@ whether they subscribed to reports, and whether each report was actually deliver
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS, Leaflet, Recharts |
+| Frontend | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS, MapLibre GL JS (WebGL map with globe view), Recharts |
 | Backend | Next.js Route Handlers (REST API), Zod validation, node-cron worker |
 | Database | PostgreSQL with Prisma ORM |
 | Auth | NextAuth (Auth.js) with Google OAuth 2.0 |
 | Email | Resend (SMTP fallback supported), signed delivery webhooks |
 | SMS | textbee.dev Android SMS gateway, signed delivery webhooks |
-| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), geoBoundaries (district/taluk boundaries), NASA Black Marble (night lights), RainViewer, Esri |
+| Data | Open-Meteo (forecast, air quality, geocoding), EUMETSAT EUMETView (Meteosat), NASA GIBS (Himawari, VIIRS), GDACS (cyclones), geoBoundaries (district/taluk boundaries), NASA Black Marble (night lights), RainViewer, Esri imagery, OpenFreeMap (OpenStreetMap vector borders & labels) |
 | Hosting | Google Cloud VM + PM2 + Cloudflare Tunnel |
 
 ## Architecture
 
 ```
-Browser (Next.js React UI, Leaflet canvas layers)
+Browser (Next.js React UI, MapLibre GL WebGL map)
    │  REST /api/*
    ▼
 Next.js server ── Prisma ── PostgreSQL
@@ -106,5 +106,5 @@ Step-by-step guide for Google Cloud + Cloudflare Tunnel: **[docs/DEPLOYMENT.md](
 ## Credits
 
 Forecast data © [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0) · Satellite imagery © EUMETSAT, NASA EOSDIS GIBS,
-JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Boundaries: geoBoundaries (CC BY 4.0) · Radar: RainViewer · Map labels © Esri.
+JMA Himawari, Esri · Cyclones: GDACS (UN/EC) · Boundaries: geoBoundaries (CC BY 4.0) · Radar: RainViewer · Imagery © Esri · Borders & place names: OpenFreeMap, © OpenStreetMap contributors.
 Warnings are automated guidance; always follow official IMD and local authority advisories.
