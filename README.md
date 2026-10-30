@@ -9,7 +9,6 @@ Signed-in users can save places, compare them, set weather alerts and get a dail
 **farmer mode** for rural users. An **admin control room** shows every user, where they last signed in from,
 whether they subscribed to reports, and whether each report was actually delivered.
 
-> Web Technologies (ICT 3131) course project — MIT Manipal.
 
 ---
 
