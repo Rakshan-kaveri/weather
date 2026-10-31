@@ -119,23 +119,30 @@ export type Cyclone = {
 };
 
 export async function activeCyclones(): Promise<Cyclone[]> {
-  return cached("gdacs:tc", 1800, async () => {
+  return cached("gdacs:tc", 600, async () => {
     const to = new Date();
     const from = new Date(Date.now() - 14 * 86400_000);
     const fmt = (d: Date) => d.toISOString().slice(0, 10);
     const all: Cyclone[] = [];
+    let answered = 0;
     await Promise.all((["Green", "Orange", "Red"] as const).map(async (level) => {
       try {
         const url = `https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=TC&alertlevel=${level}&fromDate=${fmt(from)}&toDate=${fmt(to)}&pageSize=100`;
         const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
-        if (!res.ok) return;
+        // GDACS answers 404/204 when a level simply has no events — that still counts as an answer
+        if (!res.ok && res.status !== 404 && res.status !== 204) return;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const j: any = await res.json().catch(() => null);
+        const j: any = res.ok ? await res.json().catch(() => null) : { features: [] };
+        if (!j) return;
+        answered++;
         for (const f of j?.features ?? []) {
           const p = f.properties ?? {};
+          // GDACS issues a new advisory about every 6 h while a storm is alive and often leaves "iscurrent"
+          // set for days after it dissipates, so the last update time decides: none for 24 h → it's over.
+          const last = Date.parse(p.todate ?? "");
           const current = p.iscurrent === true || String(p.iscurrent).toLowerCase() === "true";
-          const ended = p.todate && Date.parse(p.todate) < Date.now() - 2 * 86400_000;
-          if (!current && ended) continue;
+          const alive = Number.isFinite(last) ? last > Date.now() - 24 * 3600_000 : current;
+          if (!alive) continue;
           const [lon, lat] = f.geometry?.coordinates ?? [];
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
           const episodeFromUrl = /episodeid=(\d+)/i.exec(JSON.stringify(p.url ?? ""))?.[1];
@@ -156,6 +163,8 @@ export async function activeCyclones(): Promise<Cyclone[]> {
         /* feed unavailable for this level */
       }
     }));
+    // If GDACS didn't answer at all, don't cache "no cyclones" — keep serving the last good list.
+    if (answered === 0) throw new Error("GDACS unavailable");
     // de-duplicate by event id, keep the highest alert level
     const rank = { Green: 1, Orange: 2, Red: 3 };
     const byId = new Map<string, Cyclone>();

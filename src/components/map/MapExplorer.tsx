@@ -257,11 +257,20 @@ export default function MapExplorer() {
     const load = () =>
       fetch("/api/cyclones")
         .then((r) => r.json())
-        .then((d: { cyclones: Cyclone[] }) => setCyclones(d.cyclones ?? []))
+        .then((d: { cyclones: Cyclone[] }) => {
+          const next = d.cyclones ?? [];
+          // only redraw when the list actually changed (a storm formed, moved, changed alert or ended)
+          setCyclones((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+        })
         .catch(() => {});
     load();
-    const t = setInterval(load, 15 * 60_000);
-    return () => clearInterval(t);
+    const t = setInterval(load, 10 * 60_000);
+    const onVisible = () => document.visibilityState === "visible" && load();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -343,6 +352,9 @@ export default function MapExplorer() {
 
           const past = pts.filter((p) => !p.forecast && p.wind != null);
           const wind = past.length ? (past[past.length - 1].wind as number) : undefined;
+          // put the symbol at the storm's latest tracked position (the event list can lag behind)
+          const lastPos = pts.filter((p) => !p.forecast).pop();
+          if (lastPos) marker.setLngLat([lastPos.lon, lastPos.lat]);
           const now = imdClass(wind) ?? fallback;
           el.innerHTML = cycloneIcon(c.name, now);
           popup.setHTML(cyclonePopup(c, now, wind));
